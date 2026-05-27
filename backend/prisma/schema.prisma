@@ -1,0 +1,29 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model QATask {
+  id          String   @id @default(cuid())
+  asanaId     String   @unique
+  title       String
+  description String?
+  previewUrl  String?
+  assignee    String?
+  status      String   @default("pending")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  checks      QACheck[]
+}
+
+model QACheck {
+  id      String  @id @default(cuid())
+  taskId  String
+  task    QATask  @relation(fields: [taskId], references: [id])
+  label   String
+  checked Boolean @default(false)
+}
