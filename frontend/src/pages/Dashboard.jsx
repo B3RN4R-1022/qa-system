@@ -91,7 +91,16 @@ function Dashboard() {
 
   const tasksFiltradas = useMemo(() => {
     return tasks.filter(t => {
-      if (filtroStatus !== 'all' && t.status !== filtroStatus) return false
+      if (filtroStatus !== 'all') {
+        // Reprovado e Sugerido consideram o histórico (tags), não só o status atual
+        if (filtroStatus === 'rejected') {
+          if (t.status !== 'rejected' && !t.wasRejectedBefore) return false
+        } else if (filtroStatus === 'suggested') {
+          if (t.status !== 'suggested' && !t.wasSuggestedBefore) return false
+        } else if (t.status !== filtroStatus) {
+          return false
+        }
+      }
       if (filtroDev !== 'all' && t.assignee !== filtroDev) return false
       if (filtroProjeto !== 'all' && t.projectName !== filtroProjeto) return false
       return true
@@ -192,7 +201,20 @@ function Dashboard() {
           >
             <div className="flex items-start justify-between gap-4">
               <div className="flex-1 min-w-0">
-                <p className="font-semibold text-gray-900 truncate">{task.title}</p>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <p className="font-semibold text-gray-900 truncate">{task.title}</p>
+                  {/* Tags de histórico */}
+                  {task.wasRejectedBefore && task.status !== 'rejected' && (
+                    <span className="bg-red-50 text-red-600 border border-red-200 px-2 py-0.5 rounded-full text-[10px] font-semibold shrink-0">
+                      Já reprovada
+                    </span>
+                  )}
+                  {task.wasSuggestedBefore && task.status !== 'suggested' && (
+                    <span className="bg-amber-50 text-amber-600 border border-amber-200 px-2 py-0.5 rounded-full text-[10px] font-semibold shrink-0">
+                      Teve sugestão
+                    </span>
+                  )}
+                </div>
                 <div className="flex flex-wrap gap-3 mt-2 text-sm text-gray-500">
                   {task.assignee && (
                     <span className="flex items-center gap-1">
