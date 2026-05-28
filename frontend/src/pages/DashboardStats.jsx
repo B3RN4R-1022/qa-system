@@ -132,17 +132,32 @@ export default function DashboardStats() {
           {/* Visão Geral */}
           <section>
             <h2 className="text-base font-semibold text-gray-700 mb-4">Visão Geral</h2>
-            <div className="max-w-sm">
-              <PizzaCard title="Todas as tasks" stats={data.general} size={260} />
-            </div>
-            {/* Legenda com números */}
-            <div className="flex flex-wrap gap-4 mt-4">
-              {Object.entries(LABELS).map(([key, label]) => (
-                <div key={key} className="flex items-center gap-2">
-                  <span className="w-3 h-3 rounded-full" style={{ background: COLORS[key] }} />
-                  <span className="text-sm text-gray-600">{label}: <strong>{data.general[key] || 0}</strong></span>
-                </div>
-              ))}
+            <div className="flex flex-wrap items-center gap-6">
+              {/* Pizza */}
+              <div className="w-72 shrink-0">
+                <PizzaCard title="Todas as tasks" stats={data.general} size={260} />
+              </div>
+              {/* Cards de % */}
+              <div className="grid grid-cols-2 gap-3 flex-1 min-w-[260px]">
+                {Object.entries(LABELS).map(([key, label]) => {
+                  const total = Object.values(data.general).reduce((s, v) => s + v, 0)
+                  const val = data.general[key] || 0
+                  const pct = total > 0 ? Math.round((val / total) * 100) : 0
+                  return (
+                    <div
+                      key={key}
+                      className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm flex flex-col gap-1"
+                      style={{ borderLeft: `4px solid ${COLORS[key]}` }}
+                    >
+                      <span className="text-3xl font-bold" style={{ color: COLORS[key] }}>
+                        {pct}%
+                      </span>
+                      <span className="text-xs font-medium text-gray-500 leading-tight">{label}</span>
+                      <span className="text-xs text-gray-400">{val} task{val !== 1 ? 's' : ''}</span>
+                    </div>
+                  )
+                })}
+              </div>
             </div>
           </section>
 
