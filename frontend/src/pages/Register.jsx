@@ -21,7 +21,7 @@ function Register() {
     setErro(null)
 
     try {
-      const res = await fetch('${API}/auth/register', {
+      const res = await fetch(`${API}/auth/register`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name, email, password, registerSecret })
