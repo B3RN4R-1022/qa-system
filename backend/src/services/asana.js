@@ -111,4 +111,43 @@ async function updateStatusByName(asanaId, statusName) {
   })
 }
 
-module.exports = { getTask, addComment, updateTaskStatus, getPreviewUrl, updateStatusByName, updateApprovalStatus, getAttachments }
+async function getMyWorkspaceGid() {
+  const token = process.env.ASANA_TOKEN
+  const res = await fetch('https://app.asana.com/api/1.0/users/me?opt_fields=workspaces', {
+    headers: { 'Authorization': `Bearer ${token}` }
+  })
+  const data = await res.json()
+  return data.data?.workspaces?.[0]?.gid
+}
+
+async function listAllProjects(workspaceGid) {
+  const token = process.env.ASANA_TOKEN
+  const res = await fetch(`https://app.asana.com/api/1.0/projects?workspace=${workspaceGid}&opt_fields=name,gid`, {
+    headers: { 'Authorization': `Bearer ${token}` }
+  })
+  const data = await res.json()
+  return data.data || []
+}
+
+async function registerWebhook(projectGid, webhookUrl) {
+  const token = process.env.ASANA_TOKEN
+  const res = await fetch('https://app.asana.com/api/1.0/webhooks', {
+    method: 'POST',
+    headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      data: { resource: projectGid, target: webhookUrl }
+    })
+  })
+  return res.json()
+}
+
+async function listWebhooks(workspaceGid) {
+  const token = process.env.ASANA_TOKEN
+  const res = await fetch(`https://app.asana.com/api/1.0/webhooks?workspace=${workspaceGid}`, {
+    headers: { 'Authorization': `Bearer ${token}` }
+  })
+  const data = await res.json()
+  return data.data || []
+}
+
+module.exports = { getTask, addComment, updateTaskStatus, getPreviewUrl, updateStatusByName, updateApprovalStatus, getAttachments, getMyWorkspaceGid, listAllProjects, registerWebhook, listWebhooks }

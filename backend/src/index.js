@@ -6,6 +6,7 @@ const tasksRouter = require('./routes/tasks')
 const actionsRouter = require('./routes/actions')
 const webhookRouter = require('./routes/webhook')
 const authRouter = require('./routes/auth')
+const adminRouter = require('./routes/admin')
 const authMiddleware = require('./middleware/auth')
 
 const app = express()
@@ -20,6 +21,7 @@ app.use('/webhook', webhookRouter)
 // Rotas protegidas
 app.use('/tasks', authMiddleware, tasksRouter)
 app.use('/tasks', authMiddleware, actionsRouter)
+app.use('/admin', authMiddleware, adminRouter)
 
 app.get('/', (req, res) => {
   res.json({ status: 'ok', message: 'QA System rodando' })
