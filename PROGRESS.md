@@ -15,7 +15,7 @@ A Fase 2 (time interno: Next/Nest) será adicionada depois.
 
 ---
 
-## O que já foi feito
+## O que já foi feito ✅
 
 ### Backend (backend/)
 - Express rodando na porta 3001
@@ -25,46 +25,48 @@ A Fase 2 (time interno: Next/Nest) será adicionada depois.
   - GET /tasks — lista todas as tasks
   - GET /tasks/:id — busca task por ID
   - POST /webhook — recebe eventos do Asana
-- Serviço Asana (src/services/asana.js):
-  - getTask(taskId) — busca task no Asana
-  - addComment(taskId, text) — posta comentário
-  - updateTaskStatus(taskId, customFieldId, enumOptionId) — muda status
+  - POST /tasks/:id/approve — aprova task e muda status no Asana para "Feito"
+  - POST /tasks/:id/reject — reprova task, comenta no Asana e muda status para "Em Correção"
+- Serviços (src/services/):
+  - asana.js: getTask, addComment, getPreviewUrl, updateStatusByName
+  - parser.js: extrairRequisitos — extrai Critérios de Aceitação da descrição
 
 ### Frontend (frontend/)
-- React + Vite configurado
-- Tailwind CSS configurado
-- Shadcn/ui inicializado
-- Componentes instalados: button, card, badge, textarea
-- Ainda sem páginas criadas (próximo passo)
+- React + Vite + Tailwind + Shadcn/ui configurados
+- React Router com duas rotas: / e /review/:id
+- Dashboard: lista tasks com status, responsável e progresso dos checks
+- QAReview: checklist interativo, informações da task, botão de preview, aprovar e reprovar
+- Reprovar: abre campo de comentário, monta mensagem com itens pendentes e envia ao Asana
+
+### Fluxo completo funcionando:
+1. Task muda status no Asana → webhook dispara
+2. Backend valida campos obrigatórios (Título, Descrição, Prioridade, Complexidade, Tipo, Início)
+3. Parser extrai Critérios de Aceitação e cria QAChecks no banco
+4. Dashboard exibe a task
+5. QAer abre a task, marca os checks e aprova ou reprova
+6. Asana é atualizado automaticamente
 
 ---
 
-## Próximos passos (em ordem)
+## Próximos passos
 
-### Passo 5 — Testar Webhook Asana (ATUAL)
-- [ ] Instalar e configurar ngrok
-- [ ] Expor backend na porta 3001 com ngrok
-- [ ] Criar projeto de teste no Asana
-- [ ] Registrar webhook no Asana apontando para URL do ngrok
-- [ ] Mudar status de uma task e verificar se chega no backend
+### Passo 9 — Validação automática com comentário no Asana
+- [ ] Quando webhook chegar com campos faltando, comentar automaticamente na task e devolver pro dev (hoje só faz console.log)
 
-### Passo 6 — Frontend: Dashboard
-- [ ] Criar página Dashboard (lista de tasks pendentes de QA)
-- [ ] Conectar com GET /tasks do backend
-- [ ] Exibir cards com título, assignee e status
+### Passo 10 — Melhorias de UX
+- [ ] Loading nos botões Aprovar/Reprovar (evitar double click)
+- [ ] Tratamento de erro de rede no frontend
+- [ ] Status em português no Dashboard e QAReview
+- [ ] Filtro por status no Dashboard (Pendente / Aprovado / Reprovado)
 
-### Passo 7 — Frontend: Tela de QA Review
-- [ ] Checklist de funcionalidades
-- [ ] Botão para abrir preview Wix (nova aba)
-- [ ] Botão Aprovar
-- [ ] Botão Reprovar com campo de comentário
+### Passo 11 — Autenticação
+- [ ] Login simples com usuário/senha e JWT
+- [ ] Proteger rotas do frontend
 
-### Passo 8 — Ações ao Aprovar/Reprovar
-- [ ] Aprovar: fechar task no Asana
-- [ ] Reprovar: comentar na task + mudar status para "Em Correção"
-
-### Passo 9 — Validação automática de campos
-- [ ] Quando webhook chegar sem campos obrigatórios, comentar automaticamente e devolver pro dev
+### Passo 12 — Deploy
+- [ ] Backend: Railway ou Render
+- [ ] Frontend: Vercel ou Netlify
+- [ ] Trocar ngrok pela URL de produção no webhook Asana
 
 ---
 
@@ -83,3 +85,7 @@ ASANA_TOKEN="seu_token_pessoal_asana"
 - A Wix bloqueia iframe, então o preview abre em nova aba (window.open)
 - Webhook Asana exige resposta em menos de 10 segundos (respondemos 200 antes de processar)
 - Asana chama o webhook com x-hook-secret no primeiro request (handshake) — já tratado no código
+- SDK do Asana tem problemas com algumas chamadas — usar fetch direto quando der erro de hasOwnProperty
+- Webhook registrado no projeto "QA Teste" (GID: 1215200946967290), workspace GID: 1215181860219671
+- Campos obrigatórios validados: Título, Descrição, Prioridade, Complexidade, Tipo, Início
+- Link de preview vem nos comentários da task com o formato "Link para QA: https://..."
