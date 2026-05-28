@@ -57,7 +57,7 @@ router.post('/:id/reject', async (req, res) => {
     if (comentario?.trim()) texto += `\n\n${comentario.trim()}`
 
     await salvarChecks(checks)
-    await prisma.qATask.update({ where: { id: task.id }, data: { status: 'rejected' } })
+    await prisma.qATask.update({ where: { id: task.id }, data: { status: 'rejected', wasRejectedBefore: true } })
     await addComment(task.asanaId, texto)
     await updateApprovalStatus(task.asanaId, 'rejected')
 
@@ -81,7 +81,7 @@ router.post('/:id/suggest', async (req, res) => {
     await salvarChecks(checks)
     await prisma.qATask.update({
       where: { id: task.id },
-      data: { status: 'suggested' }
+      data: { status: 'suggested', wasRejectedBefore: true }
     })
 
     await addComment(task.asanaId, texto)
