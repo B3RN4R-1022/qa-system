@@ -22,14 +22,8 @@ router.post('/:id/approve', async (req, res) => {
     await salvarChecks(checks)
     await prisma.qATask.update({ where: { id: task.id }, data: { status: 'approved' } })
 
-    // Salva evento permanente
     await prisma.qAEvent.create({
-      data: {
-        action: 'approved',
-        projectName: task.projectName,
-        assignee: task.assignee,
-        wasFirstApproval
-      }
+      data: { asanaId: task.asanaId, action: 'approved', projectName: task.projectName, assignee: task.assignee, wasFirstApproval }
     })
 
     const naoFeitos = (checks || []).filter(c => !c.checked).map(c => `- ${c.label}`).join('\n')
@@ -61,9 +55,8 @@ router.post('/:id/reject', async (req, res) => {
     await salvarChecks(checks)
     await prisma.qATask.update({ where: { id: task.id }, data: { status: 'rejected', wasRejectedBefore: true } })
 
-    // Salva evento permanente
     await prisma.qAEvent.create({
-      data: { action: 'rejected', projectName: task.projectName, assignee: task.assignee, wasFirstApproval: false }
+      data: { asanaId: task.asanaId, action: 'rejected', projectName: task.projectName, assignee: task.assignee, wasFirstApproval: false }
     })
 
     await prisma.qAComment.create({ data: { taskId: task.id, type: 'rejected', text: texto } })
@@ -86,9 +79,8 @@ router.post('/:id/suggest', async (req, res) => {
     await salvarChecks(checks)
     await prisma.qATask.update({ where: { id: task.id }, data: { status: 'suggested', wasSuggestedBefore: true } })
 
-    // Salva evento permanente
     await prisma.qAEvent.create({
-      data: { action: 'suggested', projectName: task.projectName, assignee: task.assignee, wasFirstApproval: false }
+      data: { asanaId: task.asanaId, action: 'suggested', projectName: task.projectName, assignee: task.assignee, wasFirstApproval: false }
     })
 
     const textoSugestao = `💡 Sugestão de alteração\n\n${comentario}`

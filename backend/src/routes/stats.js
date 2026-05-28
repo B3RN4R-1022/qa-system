@@ -11,11 +11,23 @@ function getPeriodDate(period) {
 }
 
 function calcStats(events) {
+  // Agrupa por asanaId e pega o estado final de cada task
+  const byTask = {}
+  for (const e of events) {
+    if (!byTask[e.asanaId]) {
+      byTask[e.asanaId] = e
+    } else {
+      // "approved" é o estado final — sobrepõe qualquer outro
+      if (e.action === 'approved') byTask[e.asanaId] = e
+    }
+  }
+
+  const tasksFinal = Object.values(byTask)
   return {
-    approved_clean: events.filter(e => e.action === 'approved' && e.wasFirstApproval).length,
-    approved_after: events.filter(e => e.action === 'approved' && !e.wasFirstApproval).length,
-    rejected:       events.filter(e => e.action === 'rejected').length,
-    suggested:      events.filter(e => e.action === 'suggested').length,
+    approved_clean: tasksFinal.filter(e => e.action === 'approved' && e.wasFirstApproval).length,
+    approved_after: tasksFinal.filter(e => e.action === 'approved' && !e.wasFirstApproval).length,
+    rejected:       tasksFinal.filter(e => e.action === 'rejected').length,
+    suggested:      tasksFinal.filter(e => e.action === 'suggested').length,
   }
 }
 
