@@ -1,5 +1,6 @@
 generator client {
-  provider = "prisma-client-js"
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "rhel-openssl-1.0.x", "rhel-openssl-3.0.x"]
 }
 
 datasource db {
@@ -26,4 +27,13 @@ model QACheck {
   task    QATask  @relation(fields: [taskId], references: [id])
   label   String
   checked Boolean @default(false)
+}
+
+model User {
+  id          String   @id @default(uuid())
+  name        String
+  email       String   @unique
+  password    String
+  totpSecret  String?
+  createdAt   DateTime @default(now())
 }
