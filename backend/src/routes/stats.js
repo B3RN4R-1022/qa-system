@@ -39,7 +39,7 @@ router.get('/', async (req, res) => {
     // Lê da tabela permanente de eventos
     const events = await prisma.qAEvent.findMany({
       where: { createdAt: { gte: since } },
-      select: { action: true, wasFirstApproval: true, projectName: true, assignee: true }
+      select: { asanaId: true, action: true, wasFirstApproval: true, projectName: true, assignee: true }
     })
 
     const general = calcStats(events)
