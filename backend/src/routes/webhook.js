@@ -76,6 +76,8 @@ router.post('/', async (req, res) => {
 
       const requisitos = extrairRequisitos(task.notes)
       const previewUrl = await getPreviewUrl(taskId)
+      const instanciaField = task.custom_fields?.find(f => f.name === 'Instâncias' || f.name === 'Instancia' || f.name === 'Instância')
+      const projectName = instanciaField?.display_value || null
 
       const taskSalva = await prisma.qATask.upsert({
         where: { asanaId: taskId },
@@ -84,7 +86,8 @@ router.post('/', async (req, res) => {
           previewUrl,
           description: task.notes,
           title: task.name,
-          assignee: task.assignee?.name || null
+          assignee: task.assignee?.name || null,
+          projectName
         },
         create: {
           asanaId: taskId,
@@ -92,6 +95,7 @@ router.post('/', async (req, res) => {
           description: task.notes,
           previewUrl,
           assignee: task.assignee?.name || null,
+          projectName,
           status: 'in_qa'
         }
       })

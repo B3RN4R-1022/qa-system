@@ -16,6 +16,7 @@ model QATask {
   previewUrl  String?
   assignee    String?
   status      String   @default("pending")
+  projectName String?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
   checks      QACheck[]
