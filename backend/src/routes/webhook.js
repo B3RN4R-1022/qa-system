@@ -1,12 +1,12 @@
 const express = require('express')
 const router = express.Router()
 const prisma = require('../lib/prisma')
-const { getTask } = require('../services/asana')
+const { getTask, getPreviewUrl } = require('../services/asana')
+const { extrairRequisitos } = require('../services/parser')
 
-const CAMPOS_OBRIGATORIOS = ['name', 'notes']
+
 
 router.post('/', async (req, res) => {
-  // Handshake do Asana — primeira vez que ele chama o endpoint
   const secret = req.headers['x-hook-secret']
   if (secret) {
     res.setHeader('x-hook-secret', secret)
@@ -23,6 +23,17 @@ router.post('/', async (req, res) => {
     const taskId = event.resource.gid
     const task = await getTask(taskId)
 
+    /*console.log('TASK DATA:', JSON.stringify({
+      start_on: task.start_on,
+      estimated_time: task.estimated_time,
+      actual_time_minutes: task.actual_time_minutes,
+      custom_fields: task.custom_fields?.map(f => ({
+        name: f.name,
+        display_value: f.display_value,
+        type: f.type
+      }))
+    }, null, 2))*/
+
     const statusField = task.custom_fields?.find(
       f => f.name === 'Status' || f.name === 'status'
     )
@@ -31,31 +42,56 @@ router.post('/', async (req, res) => {
     const isQA = status === 'Pronto para Revisão' || status === 'Em QA'
     if (!isQA) continue
 
-    // Validar campos obrigatórios
+    // Todos os campos obrigatórios (incluindo os custom)
+    const CAMPOS_OBRIGATORIOS = [
+      'Prioridade',
+      'Complexidade',
+      'Tipo',
+      'Início'
+    ]
+
     const faltando = []
+
     if (!task.name) faltando.push('Título')
     if (!task.notes) faltando.push('Descrição')
-    if (!task.notes?.includes('http')) faltando.push('Link de Preview')
+
+    // Valida todos os campos customizados obrigatórios
+    for (const nomeCampo of CAMPOS_OBRIGATORIOS) {
+      const campo = task.custom_fields?.find(f => f.name === nomeCampo)
+      if (!campo || !campo.display_value) faltando.push(nomeCampo)
+    }
 
     if (faltando.length > 0) {
-      // TODO: comentar na task e devolver pro dev
       console.log(`Task ${taskId} faltando: ${faltando.join(', ')}`)
       continue
     }
 
-    // Salvar no banco
-    await prisma.qATask.upsert({
+    const requisitos = extrairRequisitos(task.notes)
+    const previewUrl = await getPreviewUrl(taskId)
+
+    const taskSalva = await prisma.qATask.upsert({
       where: { asanaId: taskId },
-      update: { status: 'pending' },
+      update: { status: 'pending', previewUrl },
       create: {
         asanaId: taskId,
         title: task.name,
         description: task.notes,
-        previewUrl: task.notes.match(/https?:\/\/[^\s]+/)?.[0] || null,
+        previewUrl,
         assignee: task.assignee?.name || null,
         status: 'pending'
       }
     })
+
+    if (requisitos.length > 0) {
+      await prisma.qACheck.deleteMany({ where: { taskId: taskSalva.id } })
+      await prisma.qACheck.createMany({
+        data: requisitos.map(label => ({
+          taskId: taskSalva.id,
+          label,
+          checked: false
+        }))
+      })
+    }
   }
 })
 

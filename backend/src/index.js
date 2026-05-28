@@ -3,7 +3,7 @@ const cors = require('cors')
 require('dotenv').config()
 
 const tasksRouter = require('./routes/tasks')
-
+const actionsRouter = require('./routes/actions')
 const webhookRouter = require('./routes/webhook')
 
 const app = express()
@@ -12,7 +12,7 @@ app.use(cors())
 app.use(express.json())
 
 app.use('/tasks', tasksRouter)
-
+app.use('/tasks', actionsRouter)
 app.use('/webhook', webhookRouter)
 
 app.get('/', (req, res) => {
