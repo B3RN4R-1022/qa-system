@@ -66,6 +66,7 @@ router.post('/:id/reject', async (req, res) => {
       data: { action: 'rejected', projectName: task.projectName, assignee: task.assignee, wasFirstApproval: false }
     })
 
+    await prisma.qAComment.create({ data: { taskId: task.id, type: 'rejected', text: texto } })
     await addComment(task.asanaId, texto)
     await updateApprovalStatus(task.asanaId, 'rejected')
     res.json({ success: true })
@@ -90,7 +91,9 @@ router.post('/:id/suggest', async (req, res) => {
       data: { action: 'suggested', projectName: task.projectName, assignee: task.assignee, wasFirstApproval: false }
     })
 
-    await addComment(task.asanaId, `💡 Sugestão de alteração\n\n${comentario}`)
+    const textoSugestao = `💡 Sugestão de alteração\n\n${comentario}`
+    await prisma.qAComment.create({ data: { taskId: task.id, type: 'suggested', text: textoSugestao } })
+    await addComment(task.asanaId, textoSugestao)
     await updateApprovalStatus(task.asanaId, 'changes_requested')
     res.json({ success: true })
   } catch (err) {

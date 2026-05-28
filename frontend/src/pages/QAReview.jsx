@@ -36,6 +36,8 @@ function QAReview() {
   const [attachments, setAttachments] = useState([])
   const [imgIndex, setImgIndex] = useState(0)
   const [lightbox, setLightbox] = useState(false)
+  const [comments, setComments] = useState([])
+  const [showComments, setShowComments] = useState(false)
 
   useEffect(() => {
     fetch(`${API}/tasks/${id}`, {
@@ -45,6 +47,16 @@ function QAReview() {
       .then(data => { setTask(data); setChecks(data.checks || []) })
       .catch(() => setErro('Erro ao carregar a task. Verifique se o backend está rodando.'))
   }, [id])
+
+  useEffect(() => {
+    if (!task) return
+    fetch(`${API}/tasks/${id}/comments`, {
+      headers: { 'Authorization': `Bearer ${token}` }
+    })
+      .then(r => r.json())
+      .then(data => setComments(Array.isArray(data) ? data : []))
+      .catch(() => {})
+  }, [task])
 
   useEffect(() => {
     if (!task) return
@@ -133,13 +145,52 @@ function QAReview() {
       </button>
 
       <div className="flex items-center justify-between mb-6">
-        <h1 className="text-xl font-bold">{task.title}</h1>
+        <div className="flex items-center gap-3">
+          <h1 className="text-xl font-bold">{task.title}</h1>
+          {/* Ícone de chat */}
+          {comments.length > 0 && (
+            <button
+              onClick={() => setShowComments(v => !v)}
+              title="Ver comentários"
+              className="relative flex items-center justify-center w-8 h-8 rounded-full bg-gray-100 hover:bg-gray-200 transition-colors"
+            >
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} className="w-4 h-4 text-gray-600">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+              </svg>
+              <span className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-black text-white text-[9px] flex items-center justify-center font-bold">
+                {comments.length}
+              </span>
+            </button>
+          )}
+        </div>
         {task.previewUrl && (
           <Button variant="outline" onClick={() => window.open(task.previewUrl, '_blank')}>
             Abrir Preview
           </Button>
         )}
       </div>
+
+      {/* Painel de comentários */}
+      {showComments && comments.length > 0 && (
+        <div className="mb-6 bg-gray-50 border border-gray-200 rounded-xl p-4 space-y-3">
+          <div className="flex items-center justify-between mb-1">
+            <p className="text-sm font-semibold text-gray-700">Histórico de comentários</p>
+            <button onClick={() => setShowComments(false)} className="text-gray-400 hover:text-gray-700 text-lg leading-none">✕</button>
+          </div>
+          {comments.map(c => (
+            <div key={c.id} className={`rounded-lg p-3 text-sm border-l-4 ${
+              c.type === 'rejected'  ? 'bg-red-50 border-red-400' :
+              c.type === 'suggested' ? 'bg-amber-50 border-amber-400' :
+              'bg-green-50 border-green-400'
+            }`}>
+              <p className="whitespace-pre-wrap text-gray-700">{c.text}</p>
+              <p className="text-xs text-gray-400 mt-1">
+                {new Date(c.createdAt).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })}
+              </p>
+            </div>
+          ))}
+        </div>
+      )}
 
       <div className="grid grid-cols-2 gap-6">
         {/* Checklist */}

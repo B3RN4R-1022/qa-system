@@ -31,6 +31,21 @@ router.get('/:id', async (req, res) => {
   })
 })
 
+// Buscar comentários salvos de uma task
+router.get('/:id/comments', async (req, res) => {
+  try {
+    const task = await prisma.qATask.findUnique({ where: { id: req.params.id } })
+    if (!task) return res.status(404).json({ error: 'Task não encontrada' })
+    const comments = await prisma.qAComment.findMany({
+      where: { taskId: task.id },
+      orderBy: { createdAt: 'asc' }
+    })
+    res.json(comments)
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
 // Buscar anexos (screenshots) de uma task via Asana
 router.get('/:id/attachments', async (req, res) => {
   try {

@@ -22,6 +22,7 @@ model QATask {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
   checks      QACheck[]
+  comments    QAComment[]
 }
 
 model QACheck {
@@ -30,6 +31,15 @@ model QACheck {
   task    QATask  @relation(fields: [taskId], references: [id])
   label   String
   checked Boolean @default(false)
+}
+
+model QAComment {
+  id        String   @id @default(cuid())
+  taskId    String
+  task      QATask   @relation(fields: [taskId], references: [id])
+  type      String   // 'rejected' | 'suggested' | 'approved'
+  text      String
+  createdAt DateTime @default(now())
 }
 
 model QAEvent {
