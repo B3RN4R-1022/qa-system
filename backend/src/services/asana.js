@@ -52,6 +52,34 @@ async function getPreviewUrl(taskId) {
   return match ? match[0] : null
 }
 
+// Aciona os botões nativos de aprovação do Asana
+// approvalStatus: 'approved' | 'changes_requested' | 'rejected'
+async function updateApprovalStatus(taskId, approvalStatus) {
+  const token = process.env.ASANA_TOKEN
+  const res = await fetch(`https://app.asana.com/api/1.0/tasks/${taskId}`, {
+    method: 'PUT',
+    headers: {
+      'Authorization': `Bearer ${token}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      data: { approval_status: approvalStatus }
+    })
+  })
+  const data = await res.json()
+  if (!res.ok) throw new Error(data.errors?.[0]?.message || 'Erro ao atualizar aprovação')
+}
+
+async function getAttachments(taskId) {
+  const token = process.env.ASANA_TOKEN
+  const res = await fetch(
+    `https://app.asana.com/api/1.0/attachments?parent=${taskId}&opt_fields=name,download_url,host,created_at`,
+    { headers: { 'Authorization': `Bearer ${token}` } }
+  )
+  const data = await res.json()
+  return data.data || []
+}
+
 async function updateStatusByName(asanaId, statusName) {
   const token = process.env.ASANA_TOKEN
 
@@ -83,4 +111,4 @@ async function updateStatusByName(asanaId, statusName) {
   })
 }
 
-module.exports = { getTask, addComment, updateTaskStatus, getPreviewUrl, updateStatusByName  }
+module.exports = { getTask, addComment, updateTaskStatus, getPreviewUrl, updateStatusByName, updateApprovalStatus, getAttachments }
