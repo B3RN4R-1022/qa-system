@@ -7,19 +7,15 @@ function getPeriodDate(period) {
   if (period === '7d')  { const d = new Date(now); d.setDate(d.getDate() - 7);   return d }
   if (period === '30d') { const d = new Date(now); d.setDate(d.getDate() - 30);  return d }
   if (period === '6m')  { const d = new Date(now); d.setMonth(d.getMonth() - 6); return d }
-  return new Date(0) // sem filtro
+  return new Date(0)
 }
 
-function calcStats(tasks) {
+function calcStats(events) {
   return {
-    // Aprovadas sem nenhum retorno anterior
-    approved_clean: tasks.filter(t => t.status === 'approved' && !t.wasRejectedBefore && !t.wasSuggestedBefore).length,
-    // Aprovadas após ter sido reprovada ou sugerida alguma vez
-    approved_after: tasks.filter(t => t.status === 'approved' && (t.wasRejectedBefore || t.wasSuggestedBefore)).length,
-    // Total de tasks que já foram reprovadas (independente do status atual)
-    rejected:       tasks.filter(t => t.wasRejectedBefore || t.status === 'rejected').length,
-    // Total de tasks que já receberam sugestão (independente do status atual)
-    suggested:      tasks.filter(t => t.wasSuggestedBefore || t.status === 'suggested').length,
+    approved_clean: events.filter(e => e.action === 'approved' && e.wasFirstApproval).length,
+    approved_after: events.filter(e => e.action === 'approved' && !e.wasFirstApproval).length,
+    rejected:       events.filter(e => e.action === 'rejected').length,
+    suggested:      events.filter(e => e.action === 'suggested').length,
   }
 }
 
@@ -28,35 +24,31 @@ router.get('/', async (req, res) => {
     const { period = '30d' } = req.query
     const since = getPeriodDate(period)
 
-    const tasks = await prisma.qATask.findMany({
-      where: { updatedAt: { gte: since } },
-      select: { status: true, wasRejectedBefore: true, wasSuggestedBefore: true, assignee: true, projectName: true }
+    // Lê da tabela permanente de eventos
+    const events = await prisma.qAEvent.findMany({
+      where: { createdAt: { gte: since } },
+      select: { action: true, wasFirstApproval: true, projectName: true, assignee: true }
     })
 
-    // Geral
-    const general = calcStats(tasks)
+    const general = calcStats(events)
 
     // Por projeto
     const projectMap = {}
-    tasks.forEach(t => {
-      const key = t.projectName || 'Sem projeto'
+    events.forEach(e => {
+      const key = e.projectName || 'Sem projeto'
       if (!projectMap[key]) projectMap[key] = []
-      projectMap[key].push(t)
+      projectMap[key].push(e)
     })
-    const byProject = Object.entries(projectMap).map(([name, list]) => ({
-      name, ...calcStats(list)
-    }))
+    const byProject = Object.entries(projectMap).map(([name, list]) => ({ name, ...calcStats(list) }))
 
     // Por dev
     const devMap = {}
-    tasks.forEach(t => {
-      const key = t.assignee || 'Não atribuído'
+    events.forEach(e => {
+      const key = e.assignee || 'Não atribuído'
       if (!devMap[key]) devMap[key] = []
-      devMap[key].push(t)
+      devMap[key].push(e)
     })
-    const byDev = Object.entries(devMap).map(([name, list]) => ({
-      name, ...calcStats(list)
-    }))
+    const byDev = Object.entries(devMap).map(([name, list]) => ({ name, ...calcStats(list) }))
 
     res.json({ general, byProject, byDev })
   } catch (err) {

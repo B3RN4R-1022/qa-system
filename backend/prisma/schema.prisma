@@ -32,6 +32,15 @@ model QACheck {
   checked Boolean @default(false)
 }
 
+model QAEvent {
+  id             String   @id @default(cuid())
+  action         String   // 'approved' | 'rejected' | 'suggested'
+  projectName    String?
+  assignee       String?
+  wasFirstApproval Boolean @default(false) // true = aprovado direto, false = aprovado após retorno
+  createdAt      DateTime @default(now())
+}
+
 model User {
   id          String   @id @default(uuid())
   name        String
