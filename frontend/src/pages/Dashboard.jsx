@@ -52,19 +52,31 @@ function Dashboard() {
   const [tasks, setTasks] = useState([])
   const [loading, setLoading] = useState(true)
   const [erro, setErro] = useState(null)
+  const [ultimaAtualizacao, setUltimaAtualizacao] = useState(null)
   const [filtroStatus, setFiltroStatus] = useState('all')
   const [filtroDev, setFiltroDev] = useState('all')
   const [filtroProjeto, setFiltroProjeto] = useState('all')
 
   const token = localStorage.getItem('qa_token')
 
-  useEffect(() => {
+  function fetchTasks(isManual = false) {
+    if (isManual) setLoading(true)
     fetch(`${API}/tasks`, {
       headers: { 'Authorization': `Bearer ${token}` }
     })
       .then(r => r.json())
-      .then(data => { setTasks(data); setLoading(false) })
+      .then(data => {
+        setTasks(data)
+        setUltimaAtualizacao(new Date())
+        setLoading(false)
+      })
       .catch(() => { setErro('Erro ao carregar tasks.'); setLoading(false) })
+  }
+
+  useEffect(() => {
+    fetchTasks(true)
+    const interval = setInterval(() => fetchTasks(), 30000) // atualiza a cada 30s
+    return () => clearInterval(interval)
   }, [])
 
   const devOptions = useMemo(() => {
@@ -92,7 +104,17 @@ function Dashboard() {
     <div className="p-8 max-w-5xl mx-auto">
       {/* Header */}
       <div className="flex items-center justify-between mb-8">
-        <h1 className="text-2xl font-bold">Tasks em QA</h1>
+        <div>
+          <h1 className="text-2xl font-bold">Tasks em QA</h1>
+          {ultimaAtualizacao && (
+            <p className="text-xs text-gray-400 mt-0.5">
+              Atualizado às {ultimaAtualizacao.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+              <button onClick={() => fetchTasks(true)} className="ml-2 text-gray-400 hover:text-gray-700 underline">
+                atualizar agora
+              </button>
+            </p>
+          )}
+        </div>
         <div className="flex items-center gap-3">
           <span className="text-sm text-gray-500">Olá, <span className="font-medium text-gray-700">{user?.name}</span></span>
           <Button variant="outline" size="sm" onClick={logout}>Sair</Button>
