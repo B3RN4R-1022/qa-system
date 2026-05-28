@@ -9,6 +9,21 @@ export default function Settings() {
   const [resultado, setResultado] = useState(null)
   const [erro, setErro] = useState(null)
 
+  async function limparDados() {
+    if (!confirm('Isso vai apagar TODAS as tasks e eventos. Confirmar?')) return
+    setLoading(true)
+    try {
+      const res = await fetch(`${API}/admin/clear-test-data`, {
+        method: 'DELETE',
+        headers: { 'Authorization': `Bearer ${token}` }
+      })
+      const data = await res.json()
+      if (res.ok) alert(`Deletado: ${data.deletado.tasks} tasks, ${data.deletado.events} eventos`)
+      else setErro(data.error)
+    } catch { setErro('Erro de rede.') }
+    finally { setLoading(false) }
+  }
+
   async function registrarWebhooks() {
     setLoading(true)
     setResultado(null)
@@ -37,6 +52,21 @@ export default function Settings() {
       <div className="mb-8">
         <h1 className="text-2xl font-bold">Configurações</h1>
         <p className="text-sm text-gray-400 mt-0.5">Gerenciamento do sistema</p>
+      </div>
+
+      {/* Limpar dados */}
+      <div className="bg-white border border-red-100 rounded-2xl p-6 shadow-sm mb-4">
+        <h2 className="font-semibold text-gray-800 mb-1">Limpar dados de teste</h2>
+        <p className="text-sm text-gray-400 mb-4">
+          Remove todas as tasks e eventos do banco. Use apenas para testes — essa ação não pode ser desfeita.
+        </p>
+        <button
+          onClick={limparDados}
+          disabled={loading}
+          className="px-4 py-2 rounded-lg bg-red-50 border border-red-200 text-red-600 text-sm font-medium hover:bg-red-100 transition-colors disabled:opacity-40"
+        >
+          🗑 Limpar todos os dados
+        </button>
       </div>
 
       {/* Webhooks */}
