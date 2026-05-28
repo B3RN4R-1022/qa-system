@@ -1,7 +1,6 @@
 import { useEffect, useState, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import API from '@/lib/api'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { useAuth } from '@/contexts/AuthContext'
@@ -22,12 +21,29 @@ const STATUS_PT = {
   rejected: 'Reprovado'
 }
 
-const STATUS_VARIANT = {
-  pending: 'secondary',
-  in_qa: 'secondary',
-  suggested: 'secondary',
-  approved: 'default',
-  rejected: 'destructive'
+const STATUS_COLOR = {
+  pending:   'bg-gray-100 text-gray-600',
+  in_qa:     'bg-blue-100 text-blue-700',
+  suggested: 'bg-amber-100 text-amber-700',
+  approved:  'bg-green-100 text-green-700',
+  rejected:  'bg-red-100 text-red-700'
+}
+
+function FilterSelect({ label, value, onChange, options }) {
+  return (
+    <div className="flex flex-col gap-1">
+      <span className="text-xs text-gray-400 font-medium uppercase tracking-wide px-1">{label}</span>
+      <select
+        value={value}
+        onChange={e => onChange(e.target.value)}
+        className="h-9 rounded-lg border border-gray-200 bg-white px-3 py-1 text-sm text-gray-700 shadow-sm cursor-pointer focus:outline-none focus:ring-2 focus:ring-black hover:border-gray-400 transition-colors min-w-[160px]"
+      >
+        {options.map(opt => (
+          <option key={opt.value} value={opt.value}>{opt.label}</option>
+        ))}
+      </select>
+    </div>
+  )
 }
 
 function Dashboard() {
@@ -51,15 +67,14 @@ function Dashboard() {
       .catch(() => { setErro('Erro ao carregar tasks.'); setLoading(false) })
   }, [])
 
-  // Lista única de devs e projetos para os selects
-  const devs = useMemo(() => {
+  const devOptions = useMemo(() => {
     const set = new Set(tasks.map(t => t.assignee).filter(Boolean))
-    return ['all', ...set]
+    return [{ value: 'all', label: 'Todos os devs' }, ...[...set].map(d => ({ value: d, label: d }))]
   }, [tasks])
 
-  const projetos = useMemo(() => {
+  const projetoOptions = useMemo(() => {
     const set = new Set(tasks.map(t => t.projectName).filter(Boolean))
-    return ['all', ...set]
+    return [{ value: 'all', label: 'Todos os projetos' }, ...[...set].map(p => ({ value: p, label: p }))]
   }, [tasks])
 
   const tasksFiltradas = useMemo(() => {
@@ -74,98 +89,117 @@ function Dashboard() {
   if (loading) return <p className="p-8">Carregando...</p>
 
   return (
-    <div className="p-8">
-      <div className="flex items-center justify-between mb-6">
+    <div className="p-8 max-w-5xl mx-auto">
+      {/* Header */}
+      <div className="flex items-center justify-between mb-8">
         <h1 className="text-2xl font-bold">Tasks em QA</h1>
         <div className="flex items-center gap-3">
-          <span className="text-sm text-gray-500">Olá, {user?.name}</span>
+          <span className="text-sm text-gray-500">Olá, <span className="font-medium text-gray-700">{user?.name}</span></span>
           <Button variant="outline" size="sm" onClick={logout}>Sair</Button>
         </div>
       </div>
 
       {/* Filtros */}
-      <div className="flex flex-wrap gap-3 mb-6">
+      <div className="bg-gray-50 border border-gray-200 rounded-xl p-4 mb-6 flex flex-wrap items-end gap-4">
         {/* Status */}
-        <div className="flex gap-1">
-          {STATUS_FILTROS.map(f => (
-            <Button
-              key={f.value}
-              variant={filtroStatus === f.value ? 'default' : 'outline'}
-              size="sm"
-              onClick={() => setFiltroStatus(f.value)}
-            >
-              {f.label}
-            </Button>
-          ))}
+        <div className="flex flex-col gap-1">
+          <span className="text-xs text-gray-400 font-medium uppercase tracking-wide px-1">Status</span>
+          <div className="flex gap-1">
+            {STATUS_FILTROS.map(f => (
+              <button
+                key={f.value}
+                onClick={() => setFiltroStatus(f.value)}
+                className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
+                  filtroStatus === f.value
+                    ? 'bg-black text-white'
+                    : 'bg-white border border-gray-200 text-gray-600 hover:border-gray-400'
+                }`}
+              >
+                {f.label}
+              </button>
+            ))}
+          </div>
         </div>
 
-        {/* Dev */}
-        {devs.length > 1 && (
-          <select
-            value={filtroDev}
-            onChange={e => setFiltroDev(e.target.value)}
-            className="border rounded px-3 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-black"
-          >
-            <option value="all">Todos os devs</option>
-            {devs.filter(d => d !== 'all').map(dev => (
-              <option key={dev} value={dev}>{dev}</option>
-            ))}
-          </select>
-        )}
+        <FilterSelect
+          label="Dev"
+          value={filtroDev}
+          onChange={setFiltroDev}
+          options={devOptions}
+        />
 
-        {/* Projeto */}
-        {projetos.length > 1 && (
-          <select
-            value={filtroProjeto}
-            onChange={e => setFiltroProjeto(e.target.value)}
-            className="border rounded px-3 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-black"
+        <FilterSelect
+          label="Projeto"
+          value={filtroProjeto}
+          onChange={setFiltroProjeto}
+          options={projetoOptions}
+        />
+
+        {/* Limpar filtros */}
+        {(filtroStatus !== 'all' || filtroDev !== 'all' || filtroProjeto !== 'all') && (
+          <button
+            onClick={() => { setFiltroStatus('all'); setFiltroDev('all'); setFiltroProjeto('all') }}
+            className="text-xs text-gray-400 hover:text-gray-700 underline self-end pb-2 transition-colors"
           >
-            <option value="all">Todos os projetos</option>
-            {projetos.filter(p => p !== 'all').map(proj => (
-              <option key={proj} value={proj}>{proj}</option>
-            ))}
-          </select>
+            Limpar filtros
+          </button>
         )}
       </div>
 
       {erro && <p className="text-red-500 mb-4">{erro}</p>}
 
+      {/* Contagem */}
+      <p className="text-sm text-gray-400 mb-3">
+        {tasksFiltradas.length} task{tasksFiltradas.length !== 1 ? 's' : ''}
+      </p>
+
       {tasksFiltradas.length === 0 && (
-        <p className="text-gray-500">Nenhuma task encontrada.</p>
+        <div className="text-center py-12 text-gray-400">
+          <p className="text-lg">Nenhuma task encontrada</p>
+          <p className="text-sm mt-1">Tente ajustar os filtros</p>
+        </div>
       )}
 
-      <div className="grid gap-4">
+      {/* Cards */}
+      <div className="grid gap-3">
         {tasksFiltradas.map(task => (
-          <Card
+          <div
             key={task.id}
-            className="cursor-pointer hover:shadow-md transition-shadow"
             onClick={() => navigate(`/review/${task.id}`)}
+            className="bg-white border border-gray-200 rounded-xl p-4 cursor-pointer hover:shadow-md hover:border-gray-300 transition-all"
           >
-            <CardHeader>
-              <div className="flex items-center justify-between">
-                <CardTitle className="text-base">{task.title}</CardTitle>
-                <Badge variant={STATUS_VARIANT[task.status] || 'secondary'}>
-                  {STATUS_PT[task.status] || task.status}
-                </Badge>
-              </div>
-            </CardHeader>
-            <CardContent>
-              <div className="flex items-center justify-between text-sm text-gray-500">
-                <div className="flex gap-4">
-                  <span>Dev: <span className="font-medium text-gray-700">{task.assignee || 'Não atribuído'}</span></span>
-                  {task.projectName && (
-                    <span>Projeto: <span className="font-medium text-gray-700">{task.projectName}</span></span>
+            <div className="flex items-start justify-between gap-4">
+              <div className="flex-1 min-w-0">
+                <p className="font-semibold text-gray-900 truncate">{task.title}</p>
+                <div className="flex flex-wrap gap-3 mt-2 text-sm text-gray-500">
+                  {task.assignee && (
+                    <span className="flex items-center gap-1">
+                      <span className="w-5 h-5 rounded-full bg-gray-200 flex items-center justify-center text-xs font-bold text-gray-600">
+                        {task.assignee[0].toUpperCase()}
+                      </span>
+                      {task.assignee}
+                    </span>
                   )}
-                  <span>Checks: {task.checks?.filter(c => c.checked).length}/{task.checks?.length}</span>
+                  {task.projectName && (
+                    <span className="bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full text-xs font-medium">
+                      {task.projectName}
+                    </span>
+                  )}
+                  <span className="text-gray-400">
+                    {task.checks?.filter(c => c.checked).length}/{task.checks?.length} checks
+                  </span>
                 </div>
+              </div>
+              <div className="flex flex-col items-end gap-2 shrink-0">
+                <span className={`text-xs font-semibold px-2.5 py-1 rounded-full ${STATUS_COLOR[task.status] || 'bg-gray-100 text-gray-600'}`}>
+                  {STATUS_PT[task.status] || task.status}
+                </span>
                 <span className="text-xs text-gray-400">
-                  {new Date(task.createdAt).toLocaleDateString('pt-BR', {
-                    day: '2-digit', month: '2-digit', year: 'numeric'
-                  })}
+                  {new Date(task.createdAt).toLocaleDateString('pt-BR')}
                 </span>
               </div>
-            </CardContent>
-          </Card>
+            </div>
+          </div>
         ))}
       </div>
     </div>
