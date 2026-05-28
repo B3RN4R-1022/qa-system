@@ -4,6 +4,7 @@ import ProtectedRoute from './components/ProtectedRoute'
 import Sidebar from './components/Sidebar'
 import Dashboard from './pages/Dashboard'
 import DashboardStats from './pages/DashboardStats'
+import Settings from './pages/Settings'
 import QAReview from './pages/QAReview'
 import Login from './pages/Login'
 import Register from './pages/Register'
@@ -33,6 +34,9 @@ function App() {
             } />
             <Route path="/dashboard" element={
               <ProtectedRoute><DashboardStats /></ProtectedRoute>
+            } />
+            <Route path="/settings" element={
+              <ProtectedRoute><Settings /></ProtectedRoute>
             } />
             <Route path="/review/:id" element={
               <ProtectedRoute><QAReview /></ProtectedRoute>
