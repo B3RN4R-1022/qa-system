@@ -12,10 +12,14 @@ function getPeriodDate(period) {
 
 function calcStats(tasks) {
   return {
-    approved_clean: tasks.filter(t => t.status === 'approved' && !t.wasRejectedBefore).length,
-    approved_after: tasks.filter(t => t.status === 'approved' && t.wasRejectedBefore).length,
-    rejected:       tasks.filter(t => t.status === 'rejected').length,
-    suggested:      tasks.filter(t => t.status === 'suggested').length,
+    // Aprovadas sem nenhum retorno anterior
+    approved_clean: tasks.filter(t => t.status === 'approved' && !t.wasRejectedBefore && !t.wasSuggestedBefore).length,
+    // Aprovadas após ter sido reprovada ou sugerida alguma vez
+    approved_after: tasks.filter(t => t.status === 'approved' && (t.wasRejectedBefore || t.wasSuggestedBefore)).length,
+    // Total de tasks que já foram reprovadas (independente do status atual)
+    rejected:       tasks.filter(t => t.wasRejectedBefore || t.status === 'rejected').length,
+    // Total de tasks que já receberam sugestão (independente do status atual)
+    suggested:      tasks.filter(t => t.wasSuggestedBefore || t.status === 'suggested').length,
   }
 }
 
@@ -26,7 +30,7 @@ router.get('/', async (req, res) => {
 
     const tasks = await prisma.qATask.findMany({
       where: { updatedAt: { gte: since } },
-      select: { status: true, wasRejectedBefore: true, assignee: true, projectName: true }
+      select: { status: true, wasRejectedBefore: true, wasSuggestedBefore: true, assignee: true, projectName: true }
     })
 
     // Geral

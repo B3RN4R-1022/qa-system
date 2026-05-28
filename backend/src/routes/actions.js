@@ -81,7 +81,7 @@ router.post('/:id/suggest', async (req, res) => {
     await salvarChecks(checks)
     await prisma.qATask.update({
       where: { id: task.id },
-      data: { status: 'suggested', wasRejectedBefore: true }
+      data: { status: 'suggested', wasSuggestedBefore: true }
     })
 
     await addComment(task.asanaId, texto)
