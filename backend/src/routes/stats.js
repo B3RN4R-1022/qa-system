@@ -11,24 +11,35 @@ function getPeriodDate(period) {
 }
 
 function calcStats(events) {
-  // Agrupa por asanaId e pega o estado final de cada task
+  // Agrupa todos os eventos por task
   const byTask = {}
   for (const e of events) {
-    if (!byTask[e.asanaId]) {
-      byTask[e.asanaId] = e
-    } else {
-      // "approved" é o estado final — sobrepõe qualquer outro
-      if (e.action === 'approved') byTask[e.asanaId] = e
-    }
+    if (!byTask[e.asanaId]) byTask[e.asanaId] = []
+    byTask[e.asanaId].push(e)
   }
 
-  const tasksFinal = Object.values(byTask)
-  return {
-    approved_clean: tasksFinal.filter(e => e.action === 'approved' && e.wasFirstApproval).length,
-    approved_after: tasksFinal.filter(e => e.action === 'approved' && !e.wasFirstApproval).length,
-    rejected:       tasksFinal.filter(e => e.action === 'rejected').length,
-    suggested:      tasksFinal.filter(e => e.action === 'suggested').length,
+  let approved_clean = 0
+  let approved_after = 0
+  let rejected = 0
+  let suggested = 0
+
+  for (const taskEvents of Object.values(byTask)) {
+    const approvedEvent = taskEvents.find(e => e.action === 'approved')
+    const wasRejected   = taskEvents.some(e => e.action === 'rejected')
+    const wasSuggested  = taskEvents.some(e => e.action === 'suggested')
+
+    // Aprovações: mutuamente exclusivas entre si
+    if (approvedEvent) {
+      if (approvedEvent.wasFirstApproval) approved_clean++
+      else approved_after++
+    }
+
+    // Rejeições e sugestões: independem do estado final
+    if (wasRejected)  rejected++
+    if (wasSuggested) suggested++
   }
+
+  return { approved_clean, approved_after, rejected, suggested }
 }
 
 router.get('/', async (req, res) => {
