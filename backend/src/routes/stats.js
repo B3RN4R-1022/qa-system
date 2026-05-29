@@ -39,7 +39,14 @@ function calcStats(events) {
     if (wasSuggested) suggested++
   }
 
-  return { approved_clean, approved_after, rejected, suggested }
+  return {
+    approved_clean,
+    approved_after,
+    rejected,
+    suggested,
+    total_tasks:   Object.keys(byTask).length,
+    total_actions: approved_clean + approved_after + rejected + suggested,
+  }
 }
 
 router.get('/', async (req, res) => {

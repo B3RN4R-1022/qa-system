@@ -42,7 +42,11 @@ function PizzaCard({ title, stats, size = 220 }) {
   return (
     <div className="bg-white border border-gray-100 rounded-2xl p-5 shadow-sm">
       <p className="font-semibold text-gray-800 mb-1">{title}</p>
-      <p className="text-xs text-gray-400 mb-3">{total} task{total !== 1 ? 's' : ''}</p>
+      <p className="text-xs text-gray-400 mb-3">
+        Qt Tasks: <span className="font-medium text-gray-600">{stats.total_tasks ?? total}</span>
+        <span className="mx-1.5 text-gray-300">·</span>
+        Ações: <span className="font-medium text-gray-600">{stats.total_actions ?? total}</span>
+      </p>
       <ResponsiveContainer width="100%" height={size}>
         <PieChart>
           <Pie
