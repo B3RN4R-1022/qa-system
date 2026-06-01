@@ -7,10 +7,18 @@ const { extrairMockupUrl, extrairTestUrl } = require('../services/parser')
 // Listar todas as tasks
 router.get('/', async (req, res) => {
   const tasks = await prisma.qATask.findMany({
-    include: { checks: true },
+    include: {
+      checks: true,
+      _count: {
+        select: {
+          comments: { where: { type: { in: ['rejected', 'suggested'] } } }
+        }
+      }
+    },
     orderBy: { createdAt: 'desc' }
   })
-  res.json(tasks)
+  // Exponha returnCount diretamente no objeto para facilitar no frontend
+  res.json(tasks.map(t => ({ ...t, returnCount: t._count.comments })))
 })
 
 // Buscar uma task pelo ID

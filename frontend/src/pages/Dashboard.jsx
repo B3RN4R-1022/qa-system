@@ -64,8 +64,10 @@ function Dashboard() {
     fetch(`${API}/tasks`, {
       headers: { 'Authorization': `Bearer ${token}` }
     })
-      .then(r => r.json())
+      .then(r => { if (r.status === 401) { logout(); return null } return r.json() })
       .then(data => {
+        if (!data) return
+        if (!Array.isArray(data)) { setErro('Erro ao carregar tasks.'); setLoading(false); return }
         setTasks(data)
         setUltimaAtualizacao(new Date())
         setLoading(false)
@@ -212,6 +214,11 @@ function Dashboard() {
                   {task.wasSuggestedBefore && task.status !== 'suggested' && (
                     <span className="bg-amber-50 text-amber-600 border border-amber-200 px-2 py-0.5 rounded-full text-[10px] font-semibold shrink-0">
                       Teve sugestão
+                    </span>
+                  )}
+                  {task.returnCount > 0 && (
+                    <span className="bg-gray-100 text-gray-500 border border-gray-200 px-2 py-0.5 rounded-full text-[10px] font-semibold shrink-0">
+                      ↩ {task.returnCount}×
                     </span>
                   )}
                 </div>
