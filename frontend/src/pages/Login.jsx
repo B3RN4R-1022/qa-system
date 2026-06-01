@@ -26,6 +26,7 @@ function Login() {
       const res = await fetch(`${API}/auth/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
         body: JSON.stringify({ email, password })
       })
 
@@ -33,6 +34,13 @@ function Login() {
 
       if (!res.ok) {
         setErro(data.error || 'Erro ao fazer login')
+        return
+      }
+
+      // Dispositivo confiável — backend pulou o TOTP e retornou token direto
+      if (data.token) {
+        login(data.user, data.token)
+        navigate('/')
         return
       }
 
@@ -55,6 +63,7 @@ function Login() {
       const res = await fetch(`${API}/auth/verify-totp`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
         body: JSON.stringify({ tempToken, code: totpCode })
       })
 

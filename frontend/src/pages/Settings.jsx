@@ -55,7 +55,7 @@ export default function Settings() {
       </div>
 
       {/* Limpar dados */}
-      <div className="bg-white border border-red-100 rounded-2xl p-6 shadow-sm mb-4">
+      <div className="bg-white dark:bg-gray-800 border border-red-100 dark:border-red-900 rounded-2xl p-6 shadow-sm mb-4">
         <h2 className="font-semibold text-gray-800 mb-1">Limpar dados de teste</h2>
         <p className="text-sm text-gray-400 mb-4">
           Remove todas as tasks e eventos do banco. Use apenas para testes — essa ação não pode ser desfeita.
@@ -70,7 +70,7 @@ export default function Settings() {
       </div>
 
       {/* Webhooks */}
-      <div className="bg-white border border-gray-100 rounded-2xl p-6 shadow-sm">
+      <div className="bg-white dark:bg-gray-800 border border-gray-100 dark:border-gray-700 rounded-2xl p-6 shadow-sm">
         <h2 className="font-semibold text-gray-800 mb-1">Projetos do Asana</h2>
         <p className="text-sm text-gray-400 mb-4">
           Registra webhooks em todos os projetos do workspace. Use sempre que adicionar um projeto novo no Asana.
@@ -83,7 +83,7 @@ export default function Settings() {
               type="text"
               value={webhookUrl}
               onChange={e => setWebhookUrl(e.target.value)}
-              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-black"
+              className="w-full border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-black"
             />
           </div>
 

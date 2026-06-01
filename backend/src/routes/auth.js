@@ -6,6 +6,18 @@ const speakeasy = require('speakeasy')
 const QRCode = require('qrcode')
 const prisma = require('../lib/prisma')
 
+// Configurações do cookie de dispositivo confiável
+function cookieOpts() {
+  const prod = process.env.NODE_ENV === 'production'
+  return {
+    httpOnly: true,
+    secure: prod,
+    sameSite: prod ? 'none' : 'lax',
+    maxAge: 30 * 24 * 60 * 60 * 1000, // 30 dias
+    path: '/',
+  }
+}
+
 // Login — passo 1: valida email e senha
 router.post('/login', async (req, res) => {
   try {
@@ -23,6 +35,27 @@ router.post('/login', async (req, res) => {
     const senhaCorreta = await bcrypt.compare(password, user.password)
     if (!senhaCorreta) {
       return res.status(401).json({ error: 'Email ou senha incorretos' })
+    }
+
+    // Verifica se este browser já foi confirmado via TOTP antes
+    const deviceCookie = req.cookies?.trusted_device
+    if (deviceCookie) {
+      try {
+        const decoded = jwt.verify(deviceCookie, process.env.JWT_SECRET)
+        if (decoded.type === 'trusted_device' && decoded.userId === user.id) {
+          // Dispositivo confiável — pula TOTP e retorna token direto
+          const token = jwt.sign(
+            { id: user.id, email: user.email, name: user.name },
+            process.env.JWT_SECRET,
+            { expiresIn: '30d' }
+          )
+          // Renova o cookie
+          res.cookie('trusted_device', deviceCookie, cookieOpts())
+          return res.json({ token, user: { id: user.id, name: user.name, email: user.email } })
+        }
+      } catch {
+        // Cookie inválido ou expirado — continua com fluxo normal
+      }
     }
 
     // Gera token temporário válido por 5 minutos para o passo do TOTP
@@ -78,8 +111,16 @@ router.post('/verify-totp', async (req, res) => {
     const token = jwt.sign(
       { id: user.id, email: user.email, name: user.name },
       process.env.JWT_SECRET,
-      { expiresIn: '8h' }
+      { expiresIn: '30d' }
     )
+
+    // Registra este browser como dispositivo confiável por 30 dias
+    const deviceToken = jwt.sign(
+      { userId: user.id, type: 'trusted_device' },
+      process.env.JWT_SECRET,
+      { expiresIn: '30d' }
+    )
+    res.cookie('trusted_device', deviceToken, cookieOpts())
 
     res.json({ token, user: { id: user.id, name: user.name, email: user.email } })
   } catch (err) {

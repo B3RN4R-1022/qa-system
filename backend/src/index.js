@@ -1,5 +1,6 @@
 const express = require('express')
 const cors = require('cors')
+const cookieParser = require('cookie-parser')
 require('dotenv').config()
 
 const tasksRouter = require('./routes/tasks')
@@ -12,7 +13,8 @@ const authMiddleware = require('./middleware/auth')
 
 const app = express()
 
-app.use(cors())
+app.use(cors({ origin: true, credentials: true }))
+app.use(cookieParser())
 app.use(express.json())
 
 // Rotas públicas

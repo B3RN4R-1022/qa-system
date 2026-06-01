@@ -1,5 +1,6 @@
 import { BrowserRouter, Routes, Route, useLocation } from 'react-router-dom'
 import { AuthProvider } from './contexts/AuthContext'
+import { ThemeProvider } from './contexts/ThemeContext'
 import ProtectedRoute from './components/ProtectedRoute'
 import Sidebar from './components/Sidebar'
 import Dashboard from './pages/Dashboard'
@@ -23,6 +24,7 @@ function Layout({ children }) {
 
 function App() {
   return (
+    <ThemeProvider>
     <AuthProvider>
       <BrowserRouter>
         <Layout>
@@ -45,6 +47,7 @@ function App() {
         </Layout>
       </BrowserRouter>
     </AuthProvider>
+    </ThemeProvider>
   )
 }
 

@@ -1,4 +1,5 @@
 import { useNavigate, useLocation } from 'react-router-dom'
+import { useTheme } from '@/contexts/ThemeContext'
 
 const ITEMS = [
   {
@@ -58,9 +59,10 @@ const ITEMS = [
 export default function Sidebar() {
   const navigate = useNavigate()
   const { pathname } = useLocation()
+  const { dark, toggle } = useTheme()
 
   return (
-    <div className="fixed right-0 top-0 h-screen w-[72px] bg-white border-l border-gray-100 flex flex-col items-center pt-6 pb-4 gap-1 z-40 shadow-sm">
+    <div className="fixed right-0 top-0 h-screen w-[72px] bg-white dark:bg-gray-900 border-l border-gray-100 dark:border-gray-800 flex flex-col items-center pt-6 pb-4 gap-1 z-40 shadow-sm">
       {ITEMS.map(item => {
         const isActive = item.path && pathname === item.path
         return (
@@ -71,10 +73,10 @@ export default function Sidebar() {
             title={!item.enabled ? `${item.label} (em breve)` : item.label}
             className={`flex flex-col items-center gap-1 w-14 py-3 rounded-xl transition-all
               ${isActive
-                ? 'bg-black text-white'
+                ? 'bg-black dark:bg-white dark:text-black text-white'
                 : item.enabled
-                  ? 'text-gray-500 hover:bg-gray-100 hover:text-gray-900'
-                  : 'text-gray-300 cursor-not-allowed'
+                  ? 'text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 hover:text-gray-900 dark:hover:text-white'
+                  : 'text-gray-300 dark:text-gray-700 cursor-not-allowed'
               }`}
           >
             {item.icon}
@@ -82,6 +84,33 @@ export default function Sidebar() {
           </button>
         )
       })}
+
+      {/* Botão tema — fixado no fundo */}
+      <div className="mt-auto">
+        <button
+          onClick={toggle}
+          title={dark ? 'Modo claro' : 'Modo noturno'}
+          className="w-14 h-14 flex items-center justify-center rounded-xl text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 transition-all overflow-hidden"
+        >
+          <div
+            className="transition-all duration-500"
+            style={{ transform: dark ? 'rotate(0deg) scale(1)' : 'rotate(180deg) scale(1)' }}
+          >
+            {dark ? (
+              /* Sol */
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} className="w-5 h-5 text-yellow-400">
+                <circle cx="12" cy="12" r="5" />
+                <path strokeLinecap="round" d="M12 2v2M12 20v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M2 12h2M20 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42" />
+              </svg>
+            ) : (
+              /* Lua */
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} className="w-5 h-5">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z" />
+              </svg>
+            )}
+          </div>
+        </button>
+      </div>
     </div>
   )
 }
