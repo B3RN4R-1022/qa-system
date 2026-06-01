@@ -370,6 +370,16 @@ function QAReview() {
                 {aiLoading ? 'Iniciando...' : '▶ Executar análise'}
               </button>
             )}
+            {aiReport?.status === 'running' && (
+              <button
+                onClick={runAiQA}
+                disabled={aiLoading}
+                title="Reiniciar análise (cancela a atual e começa de novo)"
+                className="text-xs px-3 py-1.5 rounded-lg bg-gray-100 dark:bg-gray-700 hover:bg-red-100 dark:hover:bg-red-900/30 text-gray-500 hover:text-red-600 dark:text-gray-400 transition-colors"
+              >
+                {aiLoading ? 'Reiniciando...' : '↺ Reiniciar'}
+              </button>
+            )}
             {aiReport?.status === 'done' && (
               <button
                 onClick={runAiQA}

@@ -40,12 +40,6 @@ router.post('/', async (req, res) => {
     })
   }
 
-  // Verifica se já tem um agente rodando
-  const existing = await prisma.aIReport.findUnique({ where: { taskId } })
-  if (existing?.status === 'running') {
-    return res.status(409).json({ error: 'Análise já em andamento para esta task' })
-  }
-
   // Responde imediatamente e roda em background
   res.json({ ok: true, message: 'Análise iniciada — pode levar até 2 minutos' })
 
