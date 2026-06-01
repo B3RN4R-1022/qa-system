@@ -4,6 +4,7 @@ import API from '@/lib/api'
 import { useAuth } from '@/contexts/AuthContext'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
+import { NocorpLogo } from '@/components/NocorpLogo'
 
 function Login() {
   const navigate = useNavigate()
@@ -84,10 +85,11 @@ function Login() {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-50">
+    <div className="min-h-screen flex flex-col items-center justify-center bg-gray-50 dark:bg-gray-950 gap-6">
+      <NocorpLogo height={48} />
       <Card className="w-full max-w-sm">
         <CardHeader>
-          <CardTitle className="text-center">QA System</CardTitle>
+          <CardTitle className="text-center text-gray-700 dark:text-gray-200 text-base font-medium">Sistema de QA</CardTitle>
         </CardHeader>
         <CardContent>
 

@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react'
 import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer } from 'recharts'
+import { Link } from 'react-router-dom'
 import API from '@/lib/api'
 import { useTheme } from '@/contexts/ThemeContext'
+import { NocorpLogo } from '@/components/NocorpLogo'
 
 const COLORS_DARK = {
   approved_clean: '#00D4AA',
@@ -196,14 +198,15 @@ export default function DashboardStats() {
   const devStats = data?.byDev?.find(d => d.name === devSelecionado)
 
   return (
-    <div className="p-8 pr-24 max-w-5xl">
-      {/* Header */}
-      <div className="flex items-center justify-between mb-8">
+    <div className="p-8 max-w-5xl mx-auto">
+      {/* Header — 3 colunas: título | filtro centralizado | logo */}
+      <div className="grid grid-cols-3 items-center mb-8">
         <div>
           <h1 className="text-2xl font-bold">Dashboard</h1>
           <p className="text-sm text-gray-400 mt-0.5">Visão geral de qualidade</p>
         </div>
-        {/* Filtro de período */}
+        {/* Filtro centralizado */}
+        <div className="flex justify-center">
         <div className="flex gap-1 bg-gray-100 dark:bg-[#1a1033] border dark:border-purple-900/40 p-1 rounded-xl">
           {PERIODS.map(p => (
             <button
@@ -218,6 +221,11 @@ export default function DashboardStats() {
               {p.label}
             </button>
           ))}
+        </div>
+        </div>
+        {/* Logo à direita */}
+        <div className="flex justify-end">
+          <Link to="/"><NocorpLogo height={26} /></Link>
         </div>
       </div>
 

@@ -1,4 +1,4 @@
-import { BrowserRouter, Routes, Route, useLocation } from 'react-router-dom'
+import { BrowserRouter, Routes, Route, useLocation, Link } from 'react-router-dom'
 import { AuthProvider } from './contexts/AuthContext'
 import { ThemeProvider } from './contexts/ThemeContext'
 import ProtectedRoute from './components/ProtectedRoute'
@@ -9,14 +9,17 @@ import Settings from './pages/Settings'
 import QAReview from './pages/QAReview'
 import Login from './pages/Login'
 import Register from './pages/Register'
+import { NocorpLogo } from './components/NocorpLogo'
 
-// Só mostra sidebar nas páginas protegidas
 function Layout({ children }) {
   const { pathname } = useLocation()
   const isPublic = pathname === '/login' || pathname === '/register'
+
   return (
     <div className="min-h-screen">
-      {children}
+      <div className={!isPublic ? 'ml-[72px]' : ''}>
+        {children}
+      </div>
       {!isPublic && <Sidebar />}
     </div>
   )

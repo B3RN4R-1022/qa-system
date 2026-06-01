@@ -1,6 +1,8 @@
 import { useState } from 'react'
+import { Link } from 'react-router-dom'
 import API from '@/lib/api'
 import { Button } from '@/components/ui/button'
+import { NocorpLogo } from '@/components/NocorpLogo'
 
 export default function Settings() {
   const token = localStorage.getItem('qa_token')
@@ -48,10 +50,13 @@ export default function Settings() {
   }
 
   return (
-    <div className="p-8 pr-24 max-w-2xl">
-      <div className="mb-8">
-        <h1 className="text-2xl font-bold">Configurações</h1>
-        <p className="text-sm text-gray-400 mt-0.5">Gerenciamento do sistema</p>
+    <div className="p-8 max-w-2xl mx-auto">
+      <div className="flex items-center justify-between mb-8">
+        <div>
+          <h1 className="text-2xl font-bold">Configurações</h1>
+          <p className="text-sm text-gray-400 mt-0.5">Gerenciamento do sistema</p>
+        </div>
+        <Link to="/"><NocorpLogo height={28} /></Link>
       </div>
 
       {/* Limpar dados */}

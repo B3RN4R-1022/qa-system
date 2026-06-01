@@ -1,9 +1,8 @@
 import { useEffect, useState, useMemo } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, Link } from 'react-router-dom'
 import API from '@/lib/api'
 import { Badge } from '@/components/ui/badge'
-import { Button } from '@/components/ui/button'
-import { useAuth } from '@/contexts/AuthContext'
+import { NocorpLogo } from '@/components/NocorpLogo'
 
 const STATUS_FILTROS = [
   { label: 'Todas', value: 'all' },
@@ -48,7 +47,6 @@ function FilterSelect({ label, value, onChange, options }) {
 
 function Dashboard() {
   const navigate = useNavigate()
-  const { user, logout } = useAuth()
   const [tasks, setTasks] = useState([])
   const [loading, setLoading] = useState(true)
   const [erro, setErro] = useState(null)
@@ -120,16 +118,13 @@ function Dashboard() {
           {ultimaAtualizacao && (
             <p className="text-xs text-gray-400 mt-0.5">
               Atualizado às {ultimaAtualizacao.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
-              <button onClick={() => fetchTasks(true)} className="ml-2 text-gray-400 hover:text-gray-700 underline">
+              <button onClick={() => fetchTasks(true)} className="ml-2 text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 underline">
                 atualizar agora
               </button>
             </p>
           )}
         </div>
-        <div className="flex items-center gap-3">
-          <span className="text-sm text-gray-500">Olá, <span className="font-medium text-gray-700">{user?.name}</span></span>
-          <Button variant="outline" size="sm" onClick={logout}>Sair</Button>
-        </div>
+        <Link to="/"><NocorpLogo height={28} /></Link>
       </div>
 
       {/* Filtros */}

@@ -1,5 +1,7 @@
 import { useNavigate, useLocation } from 'react-router-dom'
 import { useTheme } from '@/contexts/ThemeContext'
+import { useAuth } from '@/contexts/AuthContext'
+import { NocorpIcon } from '@/components/NocorpLogo'
 
 const ITEMS = [
   {
@@ -60,9 +62,16 @@ export default function Sidebar() {
   const navigate = useNavigate()
   const { pathname } = useLocation()
   const { dark, toggle } = useTheme()
+  const { logout } = useAuth()
 
   return (
-    <div className="fixed right-0 top-0 h-screen w-[72px] bg-white dark:bg-gray-900 border-l border-gray-100 dark:border-gray-800 flex flex-col items-center pt-6 pb-4 gap-1 z-40 shadow-sm">
+    <div className="fixed left-0 top-0 h-screen w-[72px] bg-white dark:bg-gray-900 border-r border-gray-100 dark:border-gray-800 flex flex-col items-center pt-4 pb-4 gap-1 z-40 shadow-sm">
+      {/* Ícone Nocorp no topo */}
+      <div className="mb-3">
+        <NocorpIcon size={34} />
+      </div>
+      <div className="w-8 h-px bg-gray-100 dark:bg-gray-800 mb-2" />
+
       {ITEMS.map(item => {
         const isActive = item.path && pathname === item.path
         return (
@@ -85,8 +94,23 @@ export default function Sidebar() {
         )
       })}
 
-      {/* Botão tema — fixado no fundo */}
-      <div className="mt-auto">
+      {/* Botões no fundo */}
+      <div className="mt-auto flex flex-col items-center gap-1">
+        {/* Logout */}
+        <button
+          onClick={logout}
+          title="Sair"
+          className="w-14 h-14 flex flex-col items-center justify-center gap-1 rounded-xl text-gray-400 dark:text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-800 hover:text-red-500 dark:hover:text-red-400 transition-all"
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} className="w-5 h-5">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+          </svg>
+          <span className="text-[10px] font-medium leading-none">Sair</span>
+        </button>
+      </div>
+
+      {/* Botão tema */}
+      <div className="">
         <button
           onClick={toggle}
           title={dark ? 'Modo claro' : 'Modo noturno'}

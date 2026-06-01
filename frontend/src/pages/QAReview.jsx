@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
-import { useParams, useNavigate } from 'react-router-dom'
+import { useParams, useNavigate, Link } from 'react-router-dom'
+import { NocorpLogo } from '@/components/NocorpLogo'
 import API from '@/lib/api'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -147,6 +148,7 @@ function QAReview() {
       <div className="flex items-center justify-between mb-6">
         <div className="flex items-center gap-3">
           <h1 className="text-xl font-bold">{task.title}</h1>
+
           {/* Ícone de chat */}
           {comments.length > 0 && (
             <button
@@ -163,11 +165,14 @@ function QAReview() {
             </button>
           )}
         </div>
-        {task.previewUrl && (
-          <Button variant="outline" onClick={() => window.open(task.previewUrl, '_blank')}>
-            Abrir Preview
-          </Button>
-        )}
+        <div className="flex items-center gap-3">
+          {task.previewUrl && (
+            <Button variant="outline" onClick={() => window.open(task.previewUrl, '_blank')}>
+              Abrir Preview
+            </Button>
+          )}
+          <Link to="/"><NocorpLogo height={26} /></Link>
+        </div>
       </div>
 
       {/* Painel de comentários */}
