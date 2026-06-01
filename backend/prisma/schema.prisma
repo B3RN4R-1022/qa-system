@@ -4,8 +4,9 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")    // Transaction Pooler (6543) — para queries em runtime
+  directUrl = env("DIRECT_URL")      // Session Pooler (5432) — para migrations
 }
 
 model QATask {
@@ -59,4 +60,32 @@ model User {
   password    String
   totpSecret  String?
   createdAt   DateTime @default(now())
+}
+
+model ChatMessage {
+  id        String   @id @default(cuid())
+  role      String   // 'user' | 'assistant'
+  content   String
+  createdAt DateTime @default(now())
+}
+
+model AIReport {
+  id        String   @id @default(cuid())
+  taskId    String   @unique
+  sessionId String?
+  status    String   @default("pending") // 'pending' | 'running' | 'done' | 'error'
+  report    String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model AIKnowledge {
+  id        String   @id @default(cuid())
+  type      String   // 'skill' | 'project'
+  name      String   // nome da skill ou do projeto
+  content   String   // conteúdo da base de conhecimento
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([type, name])
 }

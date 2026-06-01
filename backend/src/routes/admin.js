@@ -12,22 +12,41 @@ router.post('/setup-webhooks', async (req, res) => {
     const workspaceGid = await getMyWorkspaceGid()
     if (!workspaceGid) return res.status(500).json({ error: 'Workspace não encontrado' })
 
+    // Lista todos os webhooks existentes e mapeia por projeto
     const existentes = await listWebhooks(workspaceGid)
-    const projectsComWebhook = new Set(existentes.map(w => w.resource?.gid))
+    const webhookPorProjeto = {}
+    for (const w of existentes) {
+      if (w.resource?.gid) webhookPorProjeto[w.resource.gid] = w
+    }
 
     const projetos = await listAllProjects(workspaceGid)
     const resultados = []
 
     for (const projeto of projetos) {
-      if (projectsComWebhook.has(projeto.gid)) {
-        resultados.push({ name: projeto.name, gid: projeto.gid, status: 'já registrado' })
+      const existente = webhookPorProjeto[projeto.gid]
+
+      // Se já existe com a URL correta e ativo → mantém
+      if (existente && existente.active && existente.target === webhookUrl) {
+        resultados.push({ name: projeto.name, gid: projeto.gid, status: 'já registrado ✓', target: existente.target })
         continue
       }
+
+      // Se existe com URL diferente ou inativo → deleta primeiro
+      if (existente) {
+        console.log(`[Webhook] Deletando webhook antigo do projeto ${projeto.name} (target: ${existente.target}, active: ${existente.active})`)
+        await fetch(`https://app.asana.com/api/1.0/webhooks/${existente.gid}`, {
+          method: 'DELETE',
+          headers: { 'Authorization': `Bearer ${process.env.ASANA_TOKEN}` }
+        })
+      }
+
+      // Re-registra com a nova URL
       const result = await registerWebhook(projeto.gid, webhookUrl)
       resultados.push({
         name: projeto.name,
         gid: projeto.gid,
-        status: result.errors ? `erro: ${result.errors[0]?.message}` : 'registrado ✓'
+        status: result.errors ? `erro: ${result.errors[0]?.message}` : 'registrado ✓',
+        target: webhookUrl
       })
     }
 

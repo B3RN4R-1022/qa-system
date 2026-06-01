@@ -10,8 +10,15 @@ sugerir alteração — acionando os botões nativos de aprovação do Asana.
 - **Banco:** PostgreSQL no Supabase + Prisma ORM (5.22.0 — NÃO usar v7, tem breaking changes)
 - **Auth:** JWT (30d) + TOTP 2FA (Google Authenticator) via speakeasy/qrcode + bcrypt + cookie-parser
 - **Integração:** Asana REST API + Webhooks (via `fetch` nativo, NÃO SDK — tem hasOwnProperty errors)
+- **IA Chat:** Groq (`llama-3.3-70b-versatile`) via REST API — 6.000 req/dia grátis
+- **IA QA Agent:** microserviço Python (FastAPI) + browser-use 0.12.9 + Playwright (Chromium) + Groq
 - **Deploy:** Vercel (frontend e backend como dois projetos separados do mesmo repo)
 - **Repositório:** https://github.com/B3RN4R-1022/qa-system
+
+> **Três processos rodam em paralelo no dev local:**
+> 1. Backend Node.js (`cd backend && npm run dev`) → porta 3001
+> 2. Frontend Vite (`cd frontend && npm run dev`) → porta 5173
+> 3. Agente Python (`cd qa-agent && .\venv\Scripts\python.exe main.py`) → porta 8000
 
 ---
 
@@ -47,6 +54,15 @@ sugerir alteração — acionando os botões nativos de aprovação do Asana.
   Campos: asanaId, action (`approved`|`rejected`|`suggested`), projectName, assignee, wasFirstApproval, createdAt.
   Não é deletado quando a task some — por isso os stats sobrevivem às 2 semanas de limpeza.
 - **User** — name, email, password (bcrypt), totpSecret
+- **ChatMessage** — histórico do chat de treinamento da IA. Campos: role (`user`|`assistant`), content, createdAt
+- **AIKnowledge** — base de conhecimento da IA. Campos: type (`skill`|`project`), name, content, updatedAt.
+  Unique em `[type, name]`. Skills = instruções gerais; projects = contexto por projeto.
+- **AIReport** — relatório do agente de QA por task. Campos: taskId (unique), sessionId,
+  status (`pending`|`running`|`done`|`error`), report, updatedAt
+
+> **DIRECT_URL (CRÍTICO para migrations):** Supabase Transaction Pooler (6543) trava no `migrate dev`.
+> Adicionar `directUrl = env("DIRECT_URL")` no datasource apontando para Session Pooler (porta **5432**).
+> `DATABASE_URL` (6543) = runtime; `DIRECT_URL` (5432) = migrations. Alternativa rápida: `npx prisma db push`.
 
 ---
 
@@ -70,6 +86,15 @@ sugerir alteração — acionando os botões nativos de aprovação do Asana.
 - `POST /admin/setup-webhooks` — re-registra webhooks em todos os projetos (deleta inativos/URL errada antes)
 - `GET /admin/webhooks` — lista webhooks ativos
 - `DELETE /admin/clear-test-data` — apaga tasks, checks, comentários e eventos
+- `GET /chat/history` — histórico do chat de treinamento
+- `POST /chat/message` — envia mensagem; injeta skills + base de conhecimento no system prompt do Groq
+- `DELETE /chat/history` — limpa histórico do chat
+- `GET /knowledge` — lista skills e projetos da base de conhecimento
+- `POST /knowledge` — cria skill ou projeto (`{type, name, content}`)
+- `PUT /knowledge/:id` — atualiza conteúdo
+- `DELETE /knowledge/:id` — remove item
+- `GET /tasks/:id/ai-report` — retorna o relatório atual do agente de QA
+- `POST /tasks/:id/run-ai-qa` — dispara o agente em background (aceita `previewUrl` override no body)
 
 ### Serviços (src/services/)
 - **asana.js:** getTask, addComment, updateStatusByName(taskId, statusName, taskData?),
@@ -118,8 +143,8 @@ Retorna também: `total_tasks` (tasks únicas) e `total_actions` (soma das categ
 ### Layout geral
 - **App.jsx** — `Layout` wrapper: `ml-[72px]` no conteúdo (compensa sidebar esquerda).
   Rotas: `/login`, `/register` públicas; `/`, `/dashboard`, `/settings`, `/review/:id` protegidas.
-- **Sidebar.jsx** — menu fixo à **esquerda** (72px): Tasks, Dashboard, Config, Conta (em breve),
-  Chat (em breve), botão Sair, botão tema (lua/sol animado). Ícone Nocorp no topo.
+- **Sidebar.jsx** — menu fixo à **esquerda** (72px): Tasks, Dashboard, Config, **Chat** (ativo),
+  Conta (em breve), botão Sair, botão tema (lua/sol animado). Ícone Nocorp no topo.
 - **ThemeContext.jsx** — dark mode via classe `.dark` no `<html>`. Persiste em localStorage.
   `COLORS_DARK` (neon) / `COLORS_LIGHT` (saturado) nos gráficos.
 - **NocorpLogo.jsx** — `NocorpLogo` (ícone + texto SVG vetorial real) e `NocorpIcon` (só ícone).
@@ -209,6 +234,70 @@ postgresql://postgres.hzvkjfieogbxdgdimnnr:SENHA@aws-1-sa-east-1.pooler.supabase
 
 ---
 
+## Chat de Treinamento da IA (frontend/src/pages/Chat.jsx)
+
+- Página `/chat` (ativada na sidebar). Conversa com Groq para treinar padrões de QA da Nocorp.
+- Backend (`routes/chat.js`) monta o system prompt dinamicamente:
+  `SYSTEM_PROMPT` base + skills (`type:skill`) + projetos (`type:project`) da AIKnowledge.
+- Histórico persiste no banco (ChatMessage) → contexto entre sessões.
+- UI: bolhas user/assistant, markdown básico (negrito, listas), starter prompts, indicador de digitação.
+
+## Base de Conhecimento (frontend/src/pages/Settings.jsx)
+
+Duas seções novas em Configurações:
+- **🧠 Skills da IA** — instruções gerais de comportamento (ex: "sempre testar mobile"). `type:skill`.
+- **📚 Base de Conhecimento** — contexto por projeto (descrição + padrões de QA). `type:project`.
+  Accordion expansível, badge "sem conteúdo"/"preenchido", CRUD completo.
+- Tudo é injetado automaticamente no Chat E no Agente de QA — sem reiniciar nada.
+
+## Agente de QA Automatizado (pasta qa-agent/)
+
+Microserviço Python separado que abre o Chromium e testa o sistema sozinho.
+
+**Arquitetura:**
+```
+QAReview → POST /tasks/:id/run-ai-qa (Node)
+   → services/browserUse.js chama POST http://127.0.0.1:8000/run-qa (Python)
+   → agent.py: browser-use abre Chromium, navega, testa
+   → Node faz polling de GET /result/:taskId até status done/error
+   → salva AIReport → QAReview exibe (polling 4s no frontend)
+```
+
+**Arquivos qa-agent/:**
+- `main.py` — FastAPI. Rotas: `/` (health), `POST /run-qa` (dispara em background), `GET /result/:id`.
+  Guarda resultados em `results_store` (dict em memória).
+- `agent.py` — lógica do browser-use. Contém:
+  - `build_task(...)` — monta o prompt com descrição + critérios + skills + knowledge.
+    Inclui passo a passo FORÇADO (login → cadastro) para evitar loop de navegação.
+  - `convert_messages(...)` — **CRÍTICO:** converte tipos `browser_use.llm.messages`
+    (SystemMessage/UserMessage/AssistantMessage) → LangChain (SystemMessage/HumanMessage/AIMessage).
+  - `BrowserUseLLM` — wrapper que torna qualquer LLM LangChain compatível com browser-use 0.12+.
+    Intercepta `ainvoke(messages, output_format=...)`, usa `with_structured_output`,
+    retorna `_CompletionWrapper` com `.completion`. Expõe `.provider`, `.model`, `.model_name`.
+  - `available_file_paths` — coleta imagens de ~/Pictures, ~/Desktop e cria `dummy.png` (1x1)
+    para uploads em formulários.
+  - **Config do Agent (browser-use 0.12.9):**
+    - `use_vision=False` — Groq llama-3.3-70b não tem visão; navega pelo DOM
+    - `flash_mode=True` — schema reduzido (só `memory`+`action`); essencial para Groq cumprir o tool call
+    - `use_thinking=False` — remove campo `thinking` do schema
+    - `initial_actions=[{'navigate': {'url': preview_url}}]` — abre a URL UMA vez antes do loop
+    - prompt PROÍBE a ação `navigate` no resto (senão entra em loop re-navegando)
+    - `max_actions_per_step=3`
+- `start.bat` — atalho para rodar o agente.
+- `venv/` — ambiente virtual Python 3.13 (NÃO commitar).
+- `.env` — `GROQ_API_KEY`, `GEMINI_API_KEY` (fallback), `PORT=8000`.
+
+**Frontend (QAReview.jsx):** card "🤖 Análise Automática de IA".
+- Botão "▶ Executar análise" aparece se task tem `previewUrl` OU `testUrl`.
+- Envia `previewUrl: task.previewUrl || task.testUrl` no body.
+- Polling de 4s enquanto status === 'running'. Mostra relatório quando 'done'.
+- **SEM timeout no polling do Node** — roda até o agente terminar (user interrompe se precisar).
+
+**browserUse.js (Node):**
+- `QA_AGENT_URL = http://127.0.0.1:8000` (NÃO localhost — IPv6 quebra).
+- Faz **health check** (GET `/`) antes de disparar; se falhar, salva erro "Serviço não está rodando".
+- O texto de erro exibido no card pode ser ESTADO ANTIGO do banco — só some ao clicar "Executar análise" de novo.
+
 ## Armadilhas conhecidas e soluções
 
 - **Prisma no Vercel:** deps em `dependencies`, `postinstall: prisma generate`,
@@ -220,6 +309,25 @@ postgresql://postgres.hzvkjfieogbxdgdimnnr:SENHA@aws-1-sa-east-1.pooler.supabase
 - **Stats:** sempre incluir `asanaId` no select do Prisma — sem ele todos os eventos colapsam em `byTask[undefined]`
 - **CORS com cookies:** precisa de `credentials: true` no CORS do Express E `credentials: 'include'` nos fetches do frontend
 - **OneDrive + Prisma:** pode dar EPERM no `prisma generate` — ignorar, não afeta migrations
+- **browser-use 0.12+ NÃO usa LangChain direto:** tem tipos de mensagem próprios e chama
+  `llm.ainvoke(msgs, output_format=X)` esperando `.completion`. Solução: wrapper `BrowserUseLLM`
+  + `convert_messages` (ver pasta qa-agent). NÃO basta subclasse com `provider` — precisa converter mensagens.
+- **Gemini free tier = 20 req/dia** (`gemini-2.5-flash`) → INVIÁVEL para QA. Usar Groq (6.000/dia).
+  Modelos Gemini 1.5 foram REMOVIDOS (404); 2.0 dá `limit:0` em contas novas; só 2.5 funciona mas com cota baixa.
+- **Chave Gemini:** criar SÓ em aistudio.google.com (não Google Cloud Console, que dá `limit:0`).
+- **greenlet/playwright DLL error no Python 3.13:** resolver com `venv` isolado (instalar fora do venv falha).
+- **localhost vs 127.0.0.1:** Node às vezes resolve localhost como IPv6 (`::1`) e não acha o Python.
+  Usar `http://127.0.0.1:8000` explícito no `QA_AGENT_URL`.
+- **Groq vision models** (`llama-3.2-*-vision`) NÃO suportam structured output do browser-use → loop de falhas.
+  Usar `llama-3.3-70b-versatile` com `use_vision=False` (navega pelo DOM).
+- **Agente em loop navegando para a mesma URL:** a ação `navigate` "termina a sequência" e o agente
+  re-navega sem agir. Solução: PROIBIR `navigate` no prompt + abrir a URL via `initial_actions` (1x antes do loop).
+- **Groq omite campos obrigatórios no tool call** (`missing properties: evaluation_previous_goal, memory, next_goal`):
+  o modelo gera a ação certa mas esquece os campos de raciocínio. Solução: `flash_mode=True` + `use_thinking=False`
+  reduz o schema para só `memory`+`action`.
+- **Chromium abria em about:blank:** ao remover `directly_open_url` E proibir `navigate`, nada abria a URL.
+  Resolver com `initial_actions=[{'navigate': {'url': preview_url}}]`.
+- **Campo webhookUrl voltava para localhost:** salvar em `localStorage('qa_webhook_url')` no Settings.
 - **URL de preview vs produção no Vercel:** preview URLs têm proteção ativa (401) — usar sempre a produção
 
 ---
@@ -227,5 +335,25 @@ postgresql://postgres.hzvkjfieogbxdgdimnnr:SENHA@aws-1-sa-east-1.pooler.supabase
 ## Próximos passos / Ideias futuras
 - [ ] Conectar ao workspace real da empresa (registrar webhooks em produção)
 - [ ] Página de Conta (perfil do usuário)
-- [ ] Chat interno (em breve na sidebar)
+- [x] Chat de treinamento da IA (Groq) — FEITO
+- [x] Base de conhecimento (skills + projetos) — FEITO
+- [x] Agente de QA automatizado (browser-use + Python) — FUNCIONANDO (logou e completou 3 etapas no eTrainer)
+- [ ] Preencher base de conhecimento com os projetos reais (deskone.com.br/helpcenter)
+- [ ] Deploy do qa-agent (atualmente só roda local — serverless não suporta browser headful)
+- [ ] Vision no agente (modelo de visão com cota alta) para sites complexos
 - [ ] Fase 2 — time interno com Next.js + NestJS
+
+## Status atual do Agente de QA (IMPORTANTE)
+
+⚙️ **Config atual:** Groq `llama-3.3-70b-versatile`, `use_vision=False`, `flash_mode=True`,
+   `use_thinking=False`, `initial_actions` para abrir URL, prompt proíbe `navigate`. 6.000 req/dia.
+✅ **Conexão Node↔Python funciona** (health check passa, card vai para "analisando...").
+✅ **Chromium abre** e o agente tenta as ações certas (ex: digitar email no login).
+🐞 **Em ajuste:** fazer o agente passar do login de forma consistente. Sequência de fixes aplicada:
+   1. flash_mode (resolver "missing properties" do Groq)
+   2. initial_actions (resolver Chromium em about:blank)
+   3. proibir navigate no prompt (resolver loop)
+   → Próximo teste: reiniciar Python + executar e ver se preenche login → cadastro até o fim.
+   Se `navigate` em initial_actions der erro de nome, tentar `go_to_url`.
+
+**Comando para rodar o agente:** `cd qa-agent && .\venv\Scripts\python.exe main.py` (ou `start.bat`).

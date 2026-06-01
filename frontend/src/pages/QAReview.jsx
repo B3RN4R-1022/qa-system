@@ -39,6 +39,8 @@ function QAReview() {
   const [lightbox, setLightbox] = useState(false)
   const [comments, setComments] = useState([])
   const [showComments, setShowComments] = useState(false)
+  const [aiReport, setAiReport] = useState(null)
+  const [aiLoading, setAiLoading] = useState(false)
 
   useEffect(() => {
     fetch(`${API}/tasks/${id}`, {
@@ -61,6 +63,33 @@ function QAReview() {
 
   useEffect(() => {
     if (!task) return
+    fetch(`${API}/tasks/${id}/ai-report`, {
+      headers: { 'Authorization': `Bearer ${token}` }
+    })
+      .then(r => r.json())
+      .then(data => setAiReport(data || null))
+      .catch(() => {})
+  }, [task])
+
+  // Polling quando status é 'running'
+  useEffect(() => {
+    if (aiReport?.status !== 'running') return
+    const interval = setInterval(() => {
+      fetch(`${API}/tasks/${id}/ai-report`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      })
+        .then(r => r.json())
+        .then(data => {
+          setAiReport(data)
+          if (data?.status !== 'running') clearInterval(interval)
+        })
+        .catch(() => {})
+    }, 4000)
+    return () => clearInterval(interval)
+  }, [aiReport?.status])
+
+  useEffect(() => {
+    if (!task) return
     fetch(`${API}/tasks/${id}/attachments`, {
       headers: { 'Authorization': `Bearer ${token}` }
     })
@@ -79,6 +108,21 @@ function QAReview() {
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [lightbox, attachments.length])
+
+  async function runAiQA() {
+    setAiLoading(true)
+    try {
+      const res = await fetch(`${API}/tasks/${id}/run-ai-qa`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ previewUrl: task.previewUrl || task.testUrl })
+      })
+      const data = await res.json()
+      if (!res.ok) { alert(data.error); return }
+      setAiReport({ status: 'running' })
+    } catch { alert('Erro ao iniciar análise') }
+    finally { setAiLoading(false) }
+  }
 
   function toggleCheck(checkId) {
     setChecks(prev => prev.map(c => c.id === checkId ? { ...c, checked: !c.checked } : c))
@@ -300,6 +344,70 @@ function QAReview() {
           )}
         </div>
       )}
+
+      {/* Análise Automática de IA */}
+      <Card className="mt-6 dark:bg-gray-800 dark:border-gray-700">
+        <CardHeader className="pb-3">
+          <div className="flex items-center justify-between">
+            <CardTitle className="text-base flex items-center gap-2">
+              <span>🤖</span> Análise Automática de IA
+              {aiReport?.status === 'running' && (
+                <span className="text-xs font-normal text-purple-500 animate-pulse">analisando...</span>
+              )}
+              {aiReport?.status === 'done' && (
+                <span className="text-xs font-normal text-green-500">concluída</span>
+              )}
+              {aiReport?.status === 'error' && (
+                <span className="text-xs font-normal text-red-500">erro</span>
+              )}
+            </CardTitle>
+            {(!aiReport || aiReport.status === 'error') && (task?.previewUrl || task?.testUrl) && (
+              <button
+                onClick={runAiQA}
+                disabled={aiLoading}
+                className="text-xs px-3 py-1.5 rounded-lg bg-purple-600 hover:bg-purple-700 text-white font-medium disabled:opacity-50 transition-colors"
+              >
+                {aiLoading ? 'Iniciando...' : '▶ Executar análise'}
+              </button>
+            )}
+            {aiReport?.status === 'done' && (
+              <button
+                onClick={runAiQA}
+                disabled={aiLoading}
+                className="text-xs px-3 py-1.5 rounded-lg bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 text-gray-600 dark:text-gray-300 transition-colors"
+              >
+                ↺ Re-analisar
+              </button>
+            )}
+          </div>
+        </CardHeader>
+        <CardContent>
+          {!aiReport && !task?.previewUrl && !task?.testUrl && (
+            <p className="text-sm text-gray-400 italic">Task sem URL de preview — adicione um Link de Teste na descrição da task no Asana.</p>
+          )}
+          {!aiReport && (task?.previewUrl || task?.testUrl) && (
+            <p className="text-sm text-gray-400">Clique em "Executar análise" para o agente de IA testar o sistema automaticamente.</p>
+          )}
+          {aiReport?.status === 'running' && (
+            <div className="flex items-center gap-3 py-2">
+              <div className="flex gap-1">
+                {[0,1,2].map(i => (
+                  <div key={i} className="w-2 h-2 rounded-full bg-purple-500 animate-bounce" style={{ animationDelay: `${i*0.15}s` }} />
+                ))}
+              </div>
+              <p className="text-sm text-gray-500 dark:text-gray-400">O agente está navegando e testando o sistema... pode levar até 2 minutos.</p>
+            </div>
+          )}
+          {aiReport?.status === 'done' && aiReport.report && (
+            <div className="text-sm text-gray-800 dark:text-gray-200 whitespace-pre-wrap leading-relaxed max-h-96 overflow-y-auto bg-gray-50 dark:bg-gray-900 rounded-lg p-4 font-mono text-xs">
+              {aiReport.report}
+            </div>
+          )}
+          {aiReport?.status === 'error' && (
+            <p className="text-sm text-red-500">{aiReport.report}</p>
+          )}
+        </CardContent>
+      </Card>
 
       {/* Painel da ação selecionada */}
       {acao && (
