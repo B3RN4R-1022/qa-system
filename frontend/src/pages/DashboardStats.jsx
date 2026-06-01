@@ -144,9 +144,9 @@ export default function DashboardStats() {
               {/* Cards de % */}
               <div className="grid grid-cols-2 gap-3 flex-1 min-w-[260px]">
                 {Object.entries(LABELS).map(([key, label]) => {
-                  const total = Object.values(data.general).reduce((s, v) => s + v, 0)
+                  const total = data.general.total_tasks || 1
                   const val = data.general[key] || 0
-                  const pct = total > 0 ? Math.round((val / total) * 100) : 0
+                  const pct = Math.round((val / total) * 100)
                   return (
                     <div
                       key={key}
