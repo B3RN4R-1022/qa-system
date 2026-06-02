@@ -124,6 +124,16 @@ function QAReview() {
     finally { setAiLoading(false) }
   }
 
+  async function clearAiReport() {
+    try {
+      await fetch(`${API}/tasks/${id}/ai-report`, {
+        method: 'DELETE',
+        headers: { 'Authorization': `Bearer ${token}` }
+      })
+      setAiReport(null)
+    } catch { alert('Erro ao limpar análise') }
+  }
+
   function toggleCheck(checkId) {
     setChecks(prev => prev.map(c => c.id === checkId ? { ...c, checked: !c.checked } : c))
   }
@@ -371,14 +381,23 @@ function QAReview() {
               </button>
             )}
             {aiReport?.status === 'running' && (
-              <button
-                onClick={runAiQA}
-                disabled={aiLoading}
-                title="Reiniciar análise (cancela a atual e começa de novo)"
-                className="text-xs px-3 py-1.5 rounded-lg bg-gray-100 dark:bg-gray-700 hover:bg-red-100 dark:hover:bg-red-900/30 text-gray-500 hover:text-red-600 dark:text-gray-400 transition-colors"
-              >
-                {aiLoading ? 'Reiniciando...' : '↺ Reiniciar'}
-              </button>
+              <div className="flex gap-2">
+                <button
+                  onClick={runAiQA}
+                  disabled={aiLoading}
+                  title="Reiniciar análise (começa do zero)"
+                  className="text-xs px-3 py-1.5 rounded-lg bg-gray-100 dark:bg-gray-700 hover:bg-purple-100 dark:hover:bg-purple-900/30 text-gray-500 hover:text-purple-600 dark:text-gray-400 transition-colors"
+                >
+                  {aiLoading ? 'Reiniciando...' : '↺ Reiniciar'}
+                </button>
+                <button
+                  onClick={clearAiReport}
+                  title="Limpar análise travada"
+                  className="text-xs px-3 py-1.5 rounded-lg bg-gray-100 dark:bg-gray-700 hover:bg-red-100 dark:hover:bg-red-900/30 text-gray-500 hover:text-red-500 dark:text-gray-400 transition-colors"
+                >
+                  ✕ Limpar
+                </button>
+              </div>
             )}
             {aiReport?.status === 'done' && (
               <button

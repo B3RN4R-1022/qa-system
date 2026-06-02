@@ -49,4 +49,14 @@ router.post('/', async (req, res) => {
   })
 })
 
+// DELETE /tasks/:id/ai-report — limpa o relatório (reseta estado stuck)
+router.delete('/', async (req, res) => {
+  try {
+    await prisma.aIReport.deleteMany({ where: { taskId: req.params.id } })
+    res.json({ ok: true })
+  } catch (err) {
+    res.status(500).json({ error: 'Erro ao limpar relatório' })
+  }
+})
+
 module.exports = router
