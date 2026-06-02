@@ -95,14 +95,10 @@ Write-OK "Dependências instaladas"
 # ── 6. Playwright / Chromium ─────────────────────────────────
 Write-Step "Instalando Chromium para automação de navegador..."
 
-$playwrightExe = "$INSTALL_DIR\venv\Scripts\playwright.exe"
-if (-not (Test-Path $playwrightExe)) {
-    Stop-OnError "playwright.exe não encontrado — a instalação das dependências falhou. Verifique os erros acima."
-}
-
-& $playwrightExe install chromium
+$pythonExe = "$INSTALL_DIR\venv\Scripts\python.exe"
+& $pythonExe -m playwright install chromium
 if ($LASTEXITCODE -ne 0) {
-    Stop-OnError "Falha ao instalar Chromium."
+    Stop-OnError "Falha ao instalar Chromium. Verifique se o playwright foi instalado corretamente."
 }
 Write-OK "Chromium instalado"
 
