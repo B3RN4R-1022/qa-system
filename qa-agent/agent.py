@@ -6,7 +6,6 @@ from browser_use.browser.profile import BrowserProfile
 from browser_use.browser.session import BrowserSession
 from browser_use.llm.messages import SystemMessage as BUSystemMessage, UserMessage as BUUserMessage, AssistantMessage as BUAssistantMessage
 from langchain_core.messages import SystemMessage as LCSystemMessage, HumanMessage, AIMessage
-from langchain_groq import ChatGroq
 
 
 def convert_messages(messages):
@@ -19,7 +18,7 @@ def convert_messages(messages):
             if isinstance(msg.content, str):
                 lc_messages.append(HumanMessage(content=msg.content))
             else:
-                # Conteúdo com imagens
+                # Conteúdo com imagens — filtra para provedores sem visão
                 content = []
                 for part in msg.content:
                     if part.type == 'text':
@@ -67,9 +66,9 @@ class BrowserUseLLM:
     3. Retorna _CompletionWrapper com .completion
     """
 
-    def __init__(self, llm):
+    def __init__(self, llm, provider_override=None):
         self._llm = llm
-        self.provider = getattr(llm, 'provider', 'groq')
+        self.provider = provider_override or getattr(llm, 'provider', 'local')
         self.model = getattr(llm, 'model', getattr(llm, 'model_name', 'unknown'))
 
     @property
@@ -110,6 +109,73 @@ class BrowserUseLLM:
             object.__setattr__(self, name, value)
         else:
             object.__setattr__(self, name, value)
+
+
+def build_llm():
+    """
+    Cria o LLM conforme AI_PROVIDER no .env:
+      - cerebras  → llama-3.3-70b grátis, 1M tokens/dia (~6 testes completos)
+      - deepseek  → DeepSeek-R1 via API (~$0.10/teste, requer saldo)
+      - ollama    → local, ILIMITADO (requer hardware adequado)
+      - groq      → cloud grátis, 100K tokens/dia (~1 teste/dia)
+    """
+    provider = os.getenv("AI_PROVIDER", "groq").lower().strip()
+
+    if provider == "cerebras":
+        from langchain_openai import ChatOpenAI
+        api_key = os.getenv("CEREBRAS_API_KEY")
+        if not api_key:
+            raise ValueError("CEREBRAS_API_KEY não configurada no .env do qa-agent")
+        model = os.getenv("CEREBRAS_MODEL", "zai-glm-4.7")
+        print(f"[QA Agent] 🧠 Usando Cerebras — modelo: {model} (GRÁTIS)")
+        base_llm = ChatOpenAI(
+            model=model,
+            api_key=api_key,
+            base_url="https://api.cerebras.ai/v1",
+            temperature=0.1,
+        )
+        return BrowserUseLLM(base_llm, provider_override="cerebras"), model
+
+    elif provider == "deepseek":
+        from langchain_openai import ChatOpenAI
+        api_key = os.getenv("DEEPSEEK_API_KEY")
+        if not api_key:
+            raise ValueError("DEEPSEEK_API_KEY não configurada no .env do qa-agent")
+        model = os.getenv("DEEPSEEK_MODEL", "deepseek-reasoner")
+        print(f"[QA Agent] 🧠 Usando DeepSeek R1 — modelo: {model} (~$0.10/teste)")
+        base_llm = ChatOpenAI(
+            model=model,
+            api_key=api_key,
+            base_url="https://api.deepseek.com",
+            temperature=0,
+        )
+        return BrowserUseLLM(base_llm, provider_override="deepseek"), model
+
+    elif provider == "ollama":
+        from langchain_ollama import ChatOllama
+        model = os.getenv("OLLAMA_MODEL", "qwen2.5:7b")
+        base_url = os.getenv("OLLAMA_URL", "http://localhost:11434")
+        print(f"[QA Agent] 🦙 Usando Ollama local — modelo: {model} (ILIMITADO)")
+        base_llm = ChatOllama(
+            model=model,
+            base_url=base_url,
+            temperature=0.1,
+        )
+        return BrowserUseLLM(base_llm, provider_override="ollama"), model
+
+    else:  # groq (default)
+        from langchain_groq import ChatGroq
+        groq_api_key = os.getenv("GROQ_API_KEY")
+        if not groq_api_key:
+            raise ValueError("GROQ_API_KEY não configurada no .env do qa-agent")
+        model = "llama-3.3-70b-versatile"
+        print(f"[QA Agent] ☁️  Usando Groq — modelo: {model} (limite: 100K tokens/dia)")
+        base_llm = ChatGroq(
+            model=model,
+            api_key=groq_api_key,
+            temperature=0.1,
+        )
+        return BrowserUseLLM(base_llm, provider_override="groq"), model
 
 
 def build_task(title: str, preview_url: str, criteria: list, project_name: str, knowledge: str, skills: str, description: str = "") -> str:
@@ -186,19 +252,12 @@ async def run_qa_agent(
     skills: str = "",
     description: str = "",
     headless: bool = False,
+    max_steps: int = None,
 ) -> dict:
-    groq_api_key = os.getenv("GROQ_API_KEY")
-    if not groq_api_key:
-        raise ValueError("GROQ_API_KEY não configurada no .env do qa-agent")
-
-    # llama-3.3-70b para raciocínio/planejamento (6.000 req/dia grátis)
-    groq = ChatGroq(
-        model="llama-3.3-70b-versatile",
-        api_key=groq_api_key,
-        temperature=0.1,
-    )
-
-    llm = BrowserUseLLM(groq)
+    # max_steps: env var MAX_STEPS define o padrão (default 15)
+    if max_steps is None:
+        max_steps = int(os.getenv("MAX_STEPS", "15"))
+    llm, model_name = build_llm()
 
     profile = BrowserProfile(headless=headless)
     session = BrowserSession(browser_profile=profile)
@@ -241,8 +300,8 @@ async def run_qa_agent(
         task=task_text,
         llm=llm,
         browser_session=session,
-        use_vision=False,       # DOM-based — Groq lê estrutura da página
-        flash_mode=True,        # schema reduzido (só memory+action) — Groq cumpre melhor
+        use_vision=False,       # DOM-based — lê estrutura da página sem visão
+        flash_mode=True,        # schema reduzido (só memory+action) — melhor compatibilidade
         use_thinking=False,     # remove campo thinking do schema
         max_actions_per_step=3,
         available_file_paths=image_paths,
@@ -250,7 +309,8 @@ async def run_qa_agent(
     )
 
     try:
-        history = await agent.run(max_steps=25)
+        print(f"[QA Agent] 🔢 Max steps: {max_steps}")
+        history = await agent.run(max_steps=max_steps)
 
         final = None
         if hasattr(history, 'final_result') and callable(history.final_result):

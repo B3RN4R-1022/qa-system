@@ -7,7 +7,10 @@ from agent import run_qa_agent
 
 load_dotenv()
 
-app = FastAPI(title="QA Agent", description="Agente de QA automatizado com browser-use + Groq")
+_provider = os.getenv("AI_PROVIDER", "groq").lower()
+_model_info = f"Ollama local ({os.getenv('OLLAMA_MODEL', 'qwen2.5:7b')}) — ILIMITADO" if _provider == "ollama" else "Groq llama-3.3-70b (100K tokens/dia)"
+
+app = FastAPI(title="QA Agent", description="Agente de QA automatizado com browser-use")
 
 app.add_middleware(
     CORSMiddleware,
@@ -30,6 +33,7 @@ class RunQARequest(BaseModel):
     knowledge: str = ""
     skills: str = ""
     headless: bool = False  # False = mostra o Chromium na tela
+    max_steps: int = None   # None = usa MAX_STEPS do .env (padrão 15)
 
 
 @app.get("/")
@@ -65,6 +69,7 @@ async def run_in_background(task_id: str, request: RunQARequest):
         knowledge=request.knowledge,
         skills=request.skills,
         headless=request.headless,
+        max_steps=request.max_steps,
     )
 
     status = "done" if result["success"] else "error"

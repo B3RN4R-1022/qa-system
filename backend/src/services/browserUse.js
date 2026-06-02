@@ -2,10 +2,18 @@ const prisma = require('../lib/prisma')
 
 const QA_AGENT_URL = process.env.QA_AGENT_URL || 'http://127.0.0.1:8000'
 
+// Controla quais tasks têm polling ativo — evita loops duplicados
+const _pollingActive = new Set()
+
 /**
  * Executa o agente QA chamando o serviço Python local
  */
 async function runBrowserUseAgent(taskId) {
+  // Se já tem um polling rodando para essa task, cancela o novo
+  if (_pollingActive.has(taskId)) {
+    console.log(`[BrowserUse] ⚠️  Polling já ativo para task ${taskId} — ignorando nova chamada`)
+    return
+  }
   // Busca task com checks
   const task = await prisma.qATask.findUnique({
     where: { id: taskId },
@@ -74,24 +82,29 @@ async function runBrowserUseAgent(taskId) {
     }
 
     // Polling sem timeout — aguarda até o agente terminar
-    while (true) {
-      await new Promise(r => setTimeout(r, 5000))
+    _pollingActive.add(taskId)
+    try {
+      while (true) {
+        await new Promise(r => setTimeout(r, 8000))
 
-      const pollRes = await fetch(`${QA_AGENT_URL}/result/${taskId}`)
-      const pollData = await pollRes.json()
+        const pollRes = await fetch(`${QA_AGENT_URL}/result/${taskId}`)
+        const pollData = await pollRes.json()
 
-      console.log(`[BrowserUse] Polling — status: ${pollData.status}`)
+        console.log(`[BrowserUse] Polling — status: ${pollData.status}`)
 
-      if (pollData.status === 'done' || pollData.status === 'error') {
-        const saved = await prisma.aIReport.update({
-          where: { taskId },
-          data: {
-            status: pollData.status,
-            report: pollData.report || 'Sem resultado',
-          }
-        })
-        return saved
+        if (pollData.status === 'done' || pollData.status === 'error') {
+          const saved = await prisma.aIReport.update({
+            where: { taskId },
+            data: {
+              status: pollData.status,
+              report: pollData.report || 'Sem resultado',
+            }
+          })
+          return saved
+        }
       }
+    } finally {
+      _pollingActive.delete(taskId)
     }
 
   } catch (err) {
