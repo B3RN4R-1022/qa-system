@@ -371,6 +371,45 @@ function TestResultCard({ phase, report, tokensUsed, onClose }) {
 
 // ─── Starters ────────────────────────────────────────────────────────────────
 
+// ─── Template /prompt-qa ─────────────────────────────────────────────────────
+
+const PROMPT_QA_TEMPLATE = `Você é um especialista em QA. Vou te descrever uma feature que desenvolvi.
+Com base nisso, gere os campos completos para eu usar no /teste-qa, neste formato exato:
+
+---
+**Título do teste:** [nome curto e objetivo, ex: "Cadastro de usuário com e-mail duplicado"]
+
+**URL de preview:** [deixe em branco — eu vou preencher]
+
+**Projeto:** [nome do projeto se identificável na descrição, senão deixe em branco]
+
+**Descrição da feature:**
+[2-4 parágrafos explicando: o que foi implementado, qual o objetivo da feature, qual o fluxo principal que o usuário percorre, e quais são as variações de cenário mais importantes]
+
+**Critérios de aceite:**
+- [ ] [critério 1 — verificação objetiva que o agente consegue fazer no browser]
+- [ ] [critério 2]
+- [ ] [critério 3]
+... (liste entre 5 e 10 critérios mensuráveis)
+
+**Comportamento esperado:**
+[descreva o estado final da tela/sistema após o fluxo principal ser executado com sucesso]
+
+**Notas para o agente:**
+[credenciais de teste se aplicável, ambientes específicos, elementos visuais importantes, edge cases que o agente deve tentar]
+---
+
+Regras para gerar os critérios:
+- Cada critério deve ser algo que o browser consegue verificar visualmente (texto na tela, botão habilitado, redirecionamento, mensagem de erro, etc.)
+- Inclua pelo menos 2 critérios negativos (o que NÃO deve acontecer ou o que deve aparecer ao errar)
+- Use linguagem direta: "Deve exibir...", "Ao clicar em X, deve...", "O campo Y deve..."
+
+A feature que desenvolvi é:
+
+[COLE AQUI A DESCRIÇÃO DA SUA FEATURE / TASK DO ASANA]`
+
+// ─── Starters ────────────────────────────────────────────────────────────────
+
 const STARTER_PROMPTS = [
   {
     label: '📋 Analisar task',
@@ -386,9 +425,11 @@ const STARTER_PROMPTS = [
     isQaCommand: true,
   },
   {
-    label: '📱 Checklist mobile',
-    desc: 'Responsividade',
-    text: 'Me dê um checklist padrão de testes para validar responsividade mobile de uma funcionalidade web.'
+    label: '📝 Gerar modelo de teste',
+    desc: 'Ajuda com /teste-qa',
+    text: '/prompt-qa',
+    fill: false,
+    isPromptQa: true,
   },
   {
     label: '✅ Critérios de aprovação',
@@ -472,6 +513,20 @@ export default function Chat() {
       setQaForm(EMPTY_FORM)
       setQaFormError(null)
       setQaFlow({ phase: 'form', testId: null, report: null, tokensUsed: null })
+      return
+    }
+
+    // Detecta /prompt-qa — injeta o template como mensagem local (sem chamar a IA)
+    if (content.toLowerCase() === '/prompt-qa') {
+      setInput('')
+      const templateMsg = {
+        id: `prompt-qa-${Date.now()}`,
+        role: 'assistant',
+        content: `Aqui está o modelo para preencher o **/teste-qa**. Substitua a última linha pela descrição da sua feature e envie — a IA vai gerar todos os campos prontos para você copiar:\n\n\`\`\`\n${PROMPT_QA_TEMPLATE}\n\`\`\``,
+        createdAt: new Date().toISOString(),
+        isLocal: true,
+      }
+      setMessages(prev => [...prev, templateMsg])
       return
     }
 
@@ -582,7 +637,8 @@ export default function Chat() {
   }
 
   function handleStarterClick(p) {
-    if (p.isQaCommand) { sendMessage('/teste-qa'); return }
+    if (p.isQaCommand)  { sendMessage('/teste-qa');  return }
+    if (p.isPromptQa)   { sendMessage('/prompt-qa'); return }
     if (p.fill) {
       setInput(p.text)
       setTimeout(() => {
@@ -655,7 +711,7 @@ export default function Chat() {
                   key={i}
                   onClick={() => handleStarterClick(p)}
                   className={`text-left px-4 py-3 rounded-xl border transition-all ${
-                    p.isQaCommand
+                    p.isQaCommand || p.isPromptQa
                       ? 'border-blue-200 dark:border-blue-800 bg-blue-50 dark:bg-blue-900/20 hover:border-blue-400 dark:hover:border-blue-600 hover:bg-blue-100 dark:hover:bg-blue-900/40'
                       : 'border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 hover:border-purple-300 dark:hover:border-purple-700 hover:bg-purple-50 dark:hover:bg-purple-900/20'
                   }`}
