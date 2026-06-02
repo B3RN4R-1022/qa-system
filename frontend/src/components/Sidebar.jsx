@@ -84,7 +84,7 @@ export default function Sidebar() {
       label: 'Config',
       path: '/settings',
       icon: icons.settings,
-      visible: isQA || isAdmin,  // dev não acessa config
+      visible: true,  // todos acessam, mas dev vê só a seção de IA
       enabled: true,
     },
     {

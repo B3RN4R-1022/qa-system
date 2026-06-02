@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import API from '@/lib/api'
 import { Button } from '@/components/ui/button'
 import { NocorpLogo } from '@/components/NocorpLogo'
+import { useAuth } from '@/contexts/AuthContext'
 
 const token = () => localStorage.getItem('qa_token')
 
@@ -469,6 +470,7 @@ function AIConfigSection() {
 
 // ─── Página principal ──────────────────────────────────────────────────────────
 export default function Settings() {
+  const { isDev } = useAuth()
   const [knowledge, setKnowledge] = useState([])
   const [loadingKnowledge, setLoadingKnowledge] = useState(true)
   const [webhookLoading, setWebhookLoading] = useState(false)
@@ -550,7 +552,9 @@ export default function Settings() {
       <div className="flex items-center justify-between mb-8">
         <div>
           <h1 className="text-2xl font-bold dark:text-white">Configurações</h1>
-          <p className="text-sm text-gray-400 mt-0.5">Gerenciamento do sistema</p>
+          <p className="text-sm text-gray-400 mt-0.5">
+            {isDev ? 'Configuração de IA' : 'Gerenciamento do sistema'}
+          </p>
         </div>
         <Link to="/"><NocorpLogo height={28} /></Link>
       </div>
@@ -562,40 +566,47 @@ export default function Settings() {
       )}
 
       <div className="space-y-4">
-        {/* Skills da IA */}
-        {loadingKnowledge ? (
-          <div className="h-32 bg-white dark:bg-gray-800 rounded-2xl border border-gray-100 dark:border-gray-700 animate-pulse" />
-        ) : (
-          <SkillsSection items={skills} onSave={handleSave} onDelete={handleDelete} />
-        )}
 
-        {/* Base de Conhecimento por Projeto */}
-        {loadingKnowledge ? (
-          <div className="h-32 bg-white dark:bg-gray-800 rounded-2xl border border-gray-100 dark:border-gray-700 animate-pulse" />
-        ) : (
-          <KnowledgeSection items={projects} onSave={handleSave} onDelete={handleDelete} />
-        )}
-
-        {/* Configuração de IA */}
+        {/* Configuração de IA — visível para todos */}
         <AIConfigSection />
 
-        {/* Webhooks */}
-        <WebhooksSection />
+        {/* Seções exclusivas para QA / admin */}
+        {!isDev && (
+          <>
+            {/* Skills da IA */}
+            {loadingKnowledge ? (
+              <div className="h-32 bg-white dark:bg-gray-800 rounded-2xl border border-gray-100 dark:border-gray-700 animate-pulse" />
+            ) : (
+              <SkillsSection items={skills} onSave={handleSave} onDelete={handleDelete} />
+            )}
 
-        {/* Limpar dados */}
-        <div className="bg-white dark:bg-gray-800 border border-red-100 dark:border-red-900 rounded-2xl p-6 shadow-sm">
-          <h2 className="font-semibold text-gray-800 dark:text-gray-100 mb-1">Limpar dados de teste</h2>
-          <p className="text-sm text-gray-400 mb-4">
-            Remove todas as tasks e eventos do banco. Use apenas para testes — essa ação não pode ser desfeita.
-          </p>
-          <button
-            onClick={limparDados}
-            disabled={webhookLoading}
-            className="px-4 py-2 rounded-lg bg-red-50 border border-red-200 text-red-600 text-sm font-medium hover:bg-red-100 transition-colors disabled:opacity-40"
-          >
-            🗑 Limpar todos os dados
-          </button>
-        </div>
+            {/* Base de Conhecimento por Projeto */}
+            {loadingKnowledge ? (
+              <div className="h-32 bg-white dark:bg-gray-800 rounded-2xl border border-gray-100 dark:border-gray-700 animate-pulse" />
+            ) : (
+              <KnowledgeSection items={projects} onSave={handleSave} onDelete={handleDelete} />
+            )}
+
+            {/* Webhooks */}
+            <WebhooksSection />
+
+            {/* Limpar dados */}
+            <div className="bg-white dark:bg-gray-800 border border-red-100 dark:border-red-900 rounded-2xl p-6 shadow-sm">
+              <h2 className="font-semibold text-gray-800 dark:text-gray-100 mb-1">Limpar dados de teste</h2>
+              <p className="text-sm text-gray-400 mb-4">
+                Remove todas as tasks e eventos do banco. Use apenas para testes — essa ação não pode ser desfeita.
+              </p>
+              <button
+                onClick={limparDados}
+                disabled={webhookLoading}
+                className="px-4 py-2 rounded-lg bg-red-50 border border-red-200 text-red-600 text-sm font-medium hover:bg-red-100 transition-colors disabled:opacity-40"
+              >
+                🗑 Limpar todos os dados
+              </button>
+            </div>
+          </>
+        )}
+
       </div>
     </div>
   )
