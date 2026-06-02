@@ -62,9 +62,10 @@ Write-OK "Pasta criada"
 Write-Step "Baixando arquivos do QA Agent..."
 
 $files = @("agent.py", "worker.py", "session.py", "main.py", "requirements.txt", "version.txt")
+$noCache = @{'Cache-Control'='no-cache'; 'Pragma'='no-cache'}
 foreach ($file in $files) {
     try {
-        Invoke-WebRequest "$GITHUB_RAW/$file" -OutFile "$INSTALL_DIR\$file" -UseBasicParsing
+        Invoke-WebRequest "$GITHUB_RAW/$file" -OutFile "$INSTALL_DIR\$file" -UseBasicParsing -Headers $noCache
         Write-OK "Baixado: $file"
     } catch {
         Stop-OnError "Falha ao baixar $file. Verifique sua conexão com a internet."
