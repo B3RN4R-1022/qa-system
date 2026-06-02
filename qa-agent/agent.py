@@ -82,13 +82,31 @@ class BrowserUseLLM:
         print(f"[BrowserUseLLM] ainvoke chamado | output_format={output_format is not None} | msgs={len(messages)}")
 
         if output_format is not None:
+            lc_msgs = convert_messages(messages)
+
+            # Cerebras não suporta min_items/max_items no JSON Schema (function_calling)
+            # → usa json_mode que passa o schema como instrução no prompt
+            use_json_mode = self.provider in ('cerebras',)
+
             try:
-                lc_msgs = convert_messages(messages)
-                structured = self._llm.with_structured_output(output_format)
+                method = "json_mode" if use_json_mode else "function_calling"
+                structured = self._llm.with_structured_output(output_format, method=method)
                 result = await structured.ainvoke(lc_msgs)
-                print(f"[BrowserUseLLM] structured OK → type={type(result).__name__}")
+                print(f"[BrowserUseLLM] structured OK ({method}) → type={type(result).__name__}")
                 return _CompletionWrapper(completion=result)
             except Exception as e:
+                err_str = str(e)
+                # Fallback automático: se rejeitou o schema, tenta json_mode
+                if not use_json_mode and ('min_items' in err_str or 'wrong_api_format' in err_str):
+                    print(f"[BrowserUseLLM] Schema rejeitado, tentando json_mode como fallback...")
+                    try:
+                        structured = self._llm.with_structured_output(output_format, method="json_mode")
+                        result = await structured.ainvoke(lc_msgs)
+                        print(f"[BrowserUseLLM] json_mode fallback OK → type={type(result).__name__}")
+                        return _CompletionWrapper(completion=result)
+                    except Exception as e2:
+                        print(f"[BrowserUseLLM] json_mode FALHOU → {type(e2).__name__}: {e2}")
+                        raise e2
                 print(f"[BrowserUseLLM] structured FALHOU → {type(e).__name__}: {e}")
                 raise
         else:
