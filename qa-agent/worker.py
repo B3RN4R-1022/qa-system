@@ -25,7 +25,7 @@ from agent import run_qa_agent
 
 load_dotenv()
 
-LOCAL_VERSION = "1.0.0"
+LOCAL_VERSION = "1.1.0"
 DEFAULT_BACKEND = os.getenv("BACKEND_URL", "https://qa-system-5vpf.onrender.com").rstrip("/")
 VERSION_URL = "https://raw.githubusercontent.com/B3RN4R-1022/qa-system/master/qa-agent/version.txt"
 POLL_INTERVAL = 5  # segundos
@@ -132,9 +132,14 @@ def ensure_cerebras_key(session_data):
 # ─── Execução de um job ──────────────────────────────────────────────────────
 async def run_job(client, backend_url, headers, job, cerebras_key):
     task_id = job["task_id"]
+    job_type = job.get("type", "qa_task")  # 'qa_task' | 'dev_test'
 
     # Reivindica o job (queued → running) — evita execução dupla
-    r = await client.post(f"{backend_url}/qa-jobs/{task_id}/claim", headers=headers)
+    r = await client.post(
+        f"{backend_url}/qa-jobs/{task_id}/claim",
+        headers=headers,
+        json={"type": job_type}
+    )
     if not r.json().get("claimed"):
         return  # outro worker pegou primeiro
 
@@ -168,7 +173,7 @@ async def run_job(client, backend_url, headers, job, cerebras_key):
         await client.post(
             f"{backend_url}/qa-jobs/{task_id}/result",
             headers=headers,
-            json={"status": status, "report": report, "tokensUsed": tokens},
+            json={"status": status, "report": report, "tokensUsed": tokens, "type": job_type},
         )
     except Exception as e:
         err(f"Falha ao enviar resultado: {e}")

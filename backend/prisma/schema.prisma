@@ -54,12 +54,30 @@ model QAEvent {
 }
 
 model User {
-  id          String   @id @default(uuid())
+  id          String     @id @default(uuid())
   name        String
-  email       String   @unique
+  email       String     @unique
   password    String
+  role        String     @default("qa")  // 'qa' | 'dev' | 'admin'
   totpSecret  String?
+  createdAt   DateTime   @default(now())
+  devTests    DevTest[]
+}
+
+model DevTest {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id])
+  title       String
+  description String
+  previewUrl  String
+  projectName String?
+  criteria    String?  // JSON: ["critério 1", "critério 2"]
+  status      String   @default("queued")  // 'queued' | 'running' | 'done' | 'error'
+  report      String?
+  tokensUsed  Int?
   createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 }
 
 model ChatMessage {

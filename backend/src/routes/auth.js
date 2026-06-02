@@ -45,13 +45,13 @@ router.post('/login', async (req, res) => {
         if (decoded.type === 'trusted_device' && decoded.userId === user.id) {
           // Dispositivo confiável — pula TOTP e retorna token direto
           const token = jwt.sign(
-            { id: user.id, email: user.email, name: user.name },
+            { id: user.id, email: user.email, name: user.name, role: user.role || 'qa' },
             process.env.JWT_SECRET,
             { expiresIn: '30d' }
           )
           // Renova o cookie
           res.cookie('trusted_device', deviceCookie, cookieOpts())
-          return res.json({ token, user: { id: user.id, name: user.name, email: user.email } })
+          return res.json({ token, user: { id: user.id, name: user.name, email: user.email, role: user.role || 'qa' } })
         }
       } catch {
         // Cookie inválido ou expirado — continua com fluxo normal
@@ -109,7 +109,7 @@ router.post('/verify-totp', async (req, res) => {
     }
 
     const token = jwt.sign(
-      { id: user.id, email: user.email, name: user.name },
+      { id: user.id, email: user.email, name: user.name, role: user.role || 'qa' },
       process.env.JWT_SECRET,
       { expiresIn: '30d' }
     )
@@ -122,7 +122,7 @@ router.post('/verify-totp', async (req, res) => {
     )
     res.cookie('trusted_device', deviceToken, cookieOpts())
 
-    res.json({ token, user: { id: user.id, name: user.name, email: user.email } })
+    res.json({ token, user: { id: user.id, name: user.name, email: user.email, role: user.role || 'qa' } })
   } catch (err) {
     console.error(err.message)
     res.status(500).json({ error: 'Erro interno do servidor' })
@@ -132,12 +132,15 @@ router.post('/verify-totp', async (req, res) => {
 // Registro
 router.post('/register', async (req, res) => {
   try {
-    const { name, email, password, registerSecret } = req.body
+    const { name, email, password, registerSecret, role: requestedRole } = req.body
 
     // Valida a senha de registro
     if (registerSecret !== process.env.REGISTER_SECRET) {
       return res.status(403).json({ error: 'Senha de registro incorreta' })
     }
+
+    // Apenas qa e dev podem ser criados via registro público
+    const role = ['dev', 'qa'].includes(requestedRole) ? requestedRole : 'qa'
 
     if (!name || !email || !password) {
       return res.status(400).json({ error: 'Nome, email e senha são obrigatórios' })
@@ -159,7 +162,7 @@ router.post('/register', async (req, res) => {
 
     const senhaHash = await bcrypt.hash(password, 10)
     const user = await prisma.user.create({
-      data: { name, email, password: senhaHash, totpSecret: totpSecret.base32 }
+      data: { name, email, password: senhaHash, totpSecret: totpSecret.base32, role }
     })
 
     // Gera o QR code para o Google Authenticator

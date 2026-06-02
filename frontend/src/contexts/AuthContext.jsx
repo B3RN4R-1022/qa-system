@@ -20,8 +20,13 @@ export function AuthProvider({ children }) {
     setUser(null)
   }
 
+  const role    = user?.role || 'qa'
+  const isAdmin = role === 'admin'
+  const isQA    = role === 'qa' || isAdmin
+  const isDev   = role === 'dev'
+
   return (
-    <AuthContext.Provider value={{ user, login, logout }}>
+    <AuthContext.Provider value={{ user, login, logout, role, isAdmin, isQA, isDev }}>
       {children}
     </AuthContext.Provider>
   )

@@ -3,6 +3,7 @@ import { useNavigate, Link } from 'react-router-dom'
 import API from '@/lib/api'
 import { Badge } from '@/components/ui/badge'
 import { NocorpLogo } from '@/components/NocorpLogo'
+import { useAuth } from '@/contexts/AuthContext'
 
 const STATUS_FILTROS = [
   { label: 'Todas', value: 'all' },
@@ -47,6 +48,7 @@ function FilterSelect({ label, value, onChange, options }) {
 
 function Dashboard() {
   const navigate = useNavigate()
+  const { isDev, user } = useAuth()
   const [tasks, setTasks] = useState([])
   const [loading, setLoading] = useState(true)
   const [erro, setErro] = useState(null)
@@ -91,8 +93,13 @@ function Dashboard() {
 
   const tasksFiltradas = useMemo(() => {
     return tasks.filter(t => {
+      // Dev só vê as suas próprias tasks (match por assignee ≈ user.name)
+      if (isDev && user?.name) {
+        const assignee = (t.assignee || '').toLowerCase()
+        const uname = user.name.toLowerCase()
+        if (!assignee.includes(uname) && !uname.includes(assignee)) return false
+      }
       if (filtroStatus !== 'all') {
-        // Reprovado e Sugerido consideram o histórico (tags), não só o status atual
         if (filtroStatus === 'rejected') {
           if (t.status !== 'rejected' && !t.wasRejectedBefore) return false
         } else if (filtroStatus === 'suggested') {
@@ -101,11 +108,11 @@ function Dashboard() {
           return false
         }
       }
-      if (filtroDev !== 'all' && t.assignee !== filtroDev) return false
+      if (!isDev && filtroDev !== 'all' && t.assignee !== filtroDev) return false
       if (filtroProjeto !== 'all' && t.projectName !== filtroProjeto) return false
       return true
     })
-  }, [tasks, filtroStatus, filtroDev, filtroProjeto])
+  }, [tasks, filtroStatus, filtroDev, filtroProjeto, isDev, user])
 
   if (loading) return <p className="p-8">Carregando...</p>
 
@@ -114,7 +121,10 @@ function Dashboard() {
       {/* Header */}
       <div className="flex items-center justify-between mb-8">
         <div>
-          <h1 className="text-2xl font-bold">Tasks em QA</h1>
+          <h1 className="text-2xl font-bold">{isDev ? 'Minhas Tasks' : 'Tasks em QA'}</h1>
+          {isDev && (
+            <p className="text-xs text-blue-500 mt-0.5 font-medium">Visualização somente leitura</p>
+          )}
           {ultimaAtualizacao && (
             <p className="text-xs text-gray-400 mt-0.5">
               Atualizado às {ultimaAtualizacao.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
@@ -149,12 +159,15 @@ function Dashboard() {
           </div>
         </div>
 
-        <FilterSelect
-          label="Dev"
-          value={filtroDev}
-          onChange={setFiltroDev}
-          options={devOptions}
-        />
+        {/* Filtro "Dev" só aparece para QA/admin */}
+        {!isDev && (
+          <FilterSelect
+            label="Dev"
+            value={filtroDev}
+            onChange={setFiltroDev}
+            options={devOptions}
+          />
+        )}
 
         <FilterSelect
           label="Projeto"
@@ -193,8 +206,12 @@ function Dashboard() {
         {tasksFiltradas.map(task => (
           <div
             key={task.id}
-            onClick={() => navigate(`/review/${task.id}`)}
-            className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl p-4 cursor-pointer hover:shadow-md hover:border-gray-300 dark:hover:border-gray-500 transition-all"
+            onClick={() => !isDev && navigate(`/review/${task.id}`)}
+            className={`bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl p-4 transition-all
+              ${isDev
+                ? 'cursor-default opacity-90'
+                : 'cursor-pointer hover:shadow-md hover:border-gray-300 dark:hover:border-gray-500'
+              }`}
           >
             <div className="flex items-start justify-between gap-4">
               <div className="flex-1 min-w-0">

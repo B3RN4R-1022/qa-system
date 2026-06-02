@@ -8,6 +8,7 @@ import DashboardStats from './pages/DashboardStats'
 import Settings from './pages/Settings'
 import QAReview from './pages/QAReview'
 import Chat from './pages/Chat'
+import DevTests from './pages/DevTests'
 import Login from './pages/Login'
 import Register from './pages/Register'
 import { NocorpLogo } from './components/NocorpLogo'
@@ -46,6 +47,9 @@ function App() {
             } />
             <Route path="/chat" element={
               <ProtectedRoute><Chat /></ProtectedRoute>
+            } />
+            <Route path="/dev-tests" element={
+              <ProtectedRoute><DevTests /></ProtectedRoute>
             } />
             <Route path="/review/:id" element={
               <ProtectedRoute><QAReview /></ProtectedRoute>

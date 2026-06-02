@@ -11,6 +11,7 @@ function Register() {
   const [name, setName] = useState('')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
+  const [role, setRole] = useState('qa')
   const [qrCode, setQrCode] = useState(null)
   const [erro, setErro] = useState(null)
   const [loading, setLoading] = useState(false)
@@ -24,7 +25,7 @@ function Register() {
       const res = await fetch(`${API}/auth/register`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, email, password, registerSecret })
+        body: JSON.stringify({ name, email, password, registerSecret, role })
       })
 
       const data = await res.json()
@@ -120,6 +121,34 @@ function Register() {
                 placeholder="mínimo 6 caracteres"
                 required
               />
+            </div>
+
+            <div>
+              <label className="text-sm font-medium block mb-1">Tipo de conta</label>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => setRole('qa')}
+                  className={`flex-1 py-2 rounded-lg border text-sm font-medium transition-all ${
+                    role === 'qa'
+                      ? 'border-black bg-black text-white'
+                      : 'border-gray-200 text-gray-600 hover:border-gray-400'
+                  }`}
+                >
+                  QA Analyst
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setRole('dev')}
+                  className={`flex-1 py-2 rounded-lg border text-sm font-medium transition-all ${
+                    role === 'dev'
+                      ? 'border-blue-600 bg-blue-600 text-white'
+                      : 'border-gray-200 text-gray-600 hover:border-gray-400'
+                  }`}
+                >
+                  Desenvolvedor
+                </button>
+              </div>
             </div>
 
             {erro && <p className="text-sm text-red-500">{erro}</p>}

@@ -4,6 +4,7 @@ import { Link } from 'react-router-dom'
 import API from '@/lib/api'
 import { useTheme } from '@/contexts/ThemeContext'
 import { NocorpLogo } from '@/components/NocorpLogo'
+import { useAuth } from '@/contexts/AuthContext'
 
 const COLORS_DARK = {
   approved_clean: '#00D4AA',
@@ -166,6 +167,7 @@ function PizzaCard({ title, stats, size = 180, colors, compact = false, onClick 
 
 export default function DashboardStats() {
   const { dark } = useTheme()
+  const { isDev, user } = useAuth()
   const COLORS = dark ? COLORS_DARK : COLORS_LIGHT
 
   const [data, setData] = useState(null)
@@ -371,43 +373,61 @@ export default function DashboardStats() {
           {data.byDev?.length > 0 && (
             <section>
               <div className="flex items-center gap-4 mb-4">
-                <h2 className="text-base font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-wide text-xs">Por Dev</h2>
-                <div style={{
-                  maxWidth: focusedDev ? '0px' : '300px',
-                  opacity: focusedDev ? 0 : 1,
-                  overflow: 'hidden',
-                  transition: `max-width ${focusedDev ? closeT : openT}, opacity ${focusedDev ? closeT : openT}`,
-                }}>
-                  <select
-                    value={devSelecionado || ''}
-                    onChange={e => setDevSelecionado(e.target.value)}
-                    className="border border-gray-200 dark:border-purple-900/40 bg-white dark:bg-[#1a1033] rounded-lg px-3 py-1.5 text-sm text-gray-700 dark:text-gray-200 focus:outline-none focus:ring-2 focus:ring-purple-500 whitespace-nowrap"
-                  >
-                    {data.byDev.map(d => (
-                      <option key={d.name} value={d.name}>{d.name}</option>
-                    ))}
-                  </select>
-                </div>
+                <h2 className="text-base font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-wide text-xs">
+                  {isDev ? 'Meu Desempenho' : 'Por Dev'}
+                </h2>
+                {/* Dropdown só para QA/admin */}
+                {!isDev && (
+                  <div style={{
+                    maxWidth: focusedDev ? '0px' : '300px',
+                    opacity: focusedDev ? 0 : 1,
+                    overflow: 'hidden',
+                    transition: `max-width ${focusedDev ? closeT : openT}, opacity ${focusedDev ? closeT : openT}`,
+                  }}>
+                    <select
+                      value={devSelecionado || ''}
+                      onChange={e => setDevSelecionado(e.target.value)}
+                      className="border border-gray-200 dark:border-purple-900/40 bg-white dark:bg-[#1a1033] rounded-lg px-3 py-1.5 text-sm text-gray-700 dark:text-gray-200 focus:outline-none focus:ring-2 focus:ring-purple-500 whitespace-nowrap"
+                    >
+                      {data.byDev.map(d => (
+                        <option key={d.name} value={d.name}>{d.name}</option>
+                      ))}
+                    </select>
+                  </div>
+                )}
                 {focusedDev && (
                   <button onClick={() => setFocusedDev(false)} className="text-xs text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 underline transition-colors">
                     reduzir
                   </button>
                 )}
               </div>
-              {devStats && (
-                <div style={{
-                  maxWidth: focusedDev ? '100%' : '384px',
-                  transition: `max-width ${focusedDev ? openT : closeT}`,
-                }}>
-                  <PizzaCard
-                    title={devSelecionado}
-                    stats={devStats}
-                    size={focusedDev ? 230 : 180}
-                    colors={COLORS}
-                    onClick={() => setFocusedDev(f => !f)}
-                  />
-                </div>
-              )}
+              {/* Dev vê só o próprio stat; QA/admin vê o selecionado */}
+              {(() => {
+                const myStats = isDev
+                  ? data.byDev.find(d => {
+                      const dn = d.name?.toLowerCase() || ''
+                      const un = (user?.name || '').toLowerCase()
+                      return dn.includes(un) || un.includes(dn)
+                    })
+                  : devStats
+                if (!myStats) return isDev
+                  ? <p className="text-sm text-gray-400">Nenhum dado encontrado para {user?.name}.</p>
+                  : null
+                return (
+                  <div style={{
+                    maxWidth: focusedDev ? '100%' : '384px',
+                    transition: `max-width ${focusedDev ? openT : closeT}`,
+                  }}>
+                    <PizzaCard
+                      title={myStats.name}
+                      stats={myStats}
+                      size={focusedDev ? 230 : 180}
+                      colors={COLORS}
+                      onClick={isDev ? undefined : () => setFocusedDev(f => !f)}
+                    />
+                  </div>
+                )
+              })()}
             </section>
           )}
 
