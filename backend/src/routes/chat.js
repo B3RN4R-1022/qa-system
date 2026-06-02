@@ -48,16 +48,59 @@ router.get('/history', async (req, res) => {
   }
 })
 
+// Chama a Cerebras API (compatível com OpenAI). Tenta primary_model primeiro;
+// se receber 429 faz fallback automático para fallback_model.
+async function callCerebras(apiKey, messages) {
+  const CEREBRAS_URL = 'https://api.cerebras.ai/v1/chat/completions'
+  const PRIMARY_MODEL  = 'gpt-oss-120b'
+  const FALLBACK_MODEL = 'zai-glm-4.7'
+
+  async function attempt(model) {
+    const res = await fetch(CEREBRAS_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type':  'application/json',
+        'Authorization': `Bearer ${apiKey}`
+      },
+      body: JSON.stringify({ model, messages, temperature: 0.7, max_tokens: 2048 })
+    })
+    return { res, data: await res.json() }
+  }
+
+  let { res, data } = await attempt(PRIMARY_MODEL)
+
+  // 429 → fallback
+  if (res.status === 429) {
+    console.warn('[Chat] Cerebras 429 em gpt-oss-120b, tentando zai-glm-4.7...');
+    ({ res, data } = await attempt(FALLBACK_MODEL))
+  }
+
+  if (!res.ok) {
+    throw new Error('Cerebras API error: ' + (data.error?.message || res.status))
+  }
+
+  const reply = data.choices?.[0]?.message?.content
+  if (!reply) throw new Error('Resposta vazia da Cerebras')
+  return reply
+}
+
 // POST /chat/message
 router.post('/message', async (req, res) => {
   const { content } = req.body
   if (!content?.trim()) return res.status(400).json({ error: 'Mensagem vazia' })
 
-  if (!process.env.GROQ_API_KEY) {
-    return res.status(500).json({ error: 'GROQ_API_KEY não configurada no servidor. Adicione ao .env do backend.' })
-  }
-
   try {
+    // Busca a Cerebras API key do banco
+    const keyRecord = await prisma.aIKnowledge.findUnique({
+      where: { type_name: { type: 'config', name: 'cerebras_api_key' } }
+    })
+
+    if (!keyRecord?.content) {
+      return res.status(500).json({
+        error: 'Cerebras API key não configurada. Vá em Configurações → Config de IA e adicione sua chave csk-...'
+      })
+    }
+
     // Salva mensagem do usuário
     await prisma.chatMessage.create({ data: { userId: req.user.id, role: 'user', content: content.trim() } })
 
@@ -86,40 +129,14 @@ router.post('/message', async (req, res) => {
       })
     }
 
-    // Monta messages no formato OpenAI (compatível com Groq)
+    // Monta messages no formato OpenAI
     const messages = [
       { role: 'system', content: dynamicPrompt },
       ...history.map(m => ({ role: m.role, content: m.content }))
     ]
 
-    // Chama Groq API (compatível com OpenAI)
-    const groqRes = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${process.env.GROQ_API_KEY}`
-      },
-      body: JSON.stringify({
-        model: 'llama-3.3-70b-versatile',
-        messages,
-        temperature: 0.7,
-        max_tokens: 2048
-      })
-    })
-
-    const data = await groqRes.json()
-
-    if (!groqRes.ok) {
-      console.error('[Chat] Erro Groq:', data)
-      return res.status(500).json({
-        error: 'Erro na API do Groq: ' + (data.error?.message || 'resposta inválida')
-      })
-    }
-
-    const reply = data.choices?.[0]?.message?.content
-    if (!reply) {
-      return res.status(500).json({ error: 'Resposta vazia do Groq' })
-    }
+    // Chama Cerebras (com fallback automático em 429)
+    const reply = await callCerebras(keyRecord.content, messages)
 
     // Salva resposta do assistente
     const saved = await prisma.chatMessage.create({

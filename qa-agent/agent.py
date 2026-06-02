@@ -317,6 +317,14 @@ Projeto: {project_name or 'Não informado'}
    Se você navegar, vai entrar em loop e falhar. Use APENAS ações que interagem com elementos
    da página atual: `input_text` (digitar), `click_element` (clicar), `scroll`, `upload_file`.
 
+## SEGURANÇA DE CREDENCIAIS — OBRIGATÓRIO
+🔐 Se você encontrar ou usar qualquer credencial durante o teste (senhas, tokens, códigos de acesso, dados pessoais):
+- Use-as APENAS para executar a ação do teste atual
+- **NUNCA as inclua no relatório final**
+- **NUNCA as registre como observação ou aviso**
+- Ao finalizar, descarte-as — não as repita em nenhuma parte do output
+- Trate toda informação de autenticação como temporária e confidencial
+
 ## O que fazer passo a passo — SIGA EXATAMENTE ESTA ORDEM
 
 **PASSO 1 — LOGIN (a página de login já está carregada):**
@@ -369,12 +377,19 @@ async def run_qa_agent(
     max_steps: int = None,
     cerebras_api_key: str = None,
 ) -> dict:
+    import tempfile, shutil
+
     if max_steps is None:
         max_steps = int(os.getenv("MAX_STEPS", "15"))
     llm, model_name = build_llm(cerebras_api_key=cerebras_api_key)
 
-    profile = BrowserProfile(headless=headless)
-    session = BrowserSession(browser_profile=profile)
+    # Diretório temporário isolado para cada execução.
+    # Garante que cookies, localStorage e sessões do Chromium são 100% descartados
+    # ao final — sem vazamento de credenciais entre testes ou entre usuários diferentes.
+    temp_profile_dir = tempfile.mkdtemp(prefix='nocorp_qa_')
+    session = BrowserSession(
+        browser_profile=BrowserProfile(headless=headless, user_data_dir=temp_profile_dir)
+    )
 
     task_text = build_task(title, preview_url, criteria, project_name, knowledge, skills, description)
 
@@ -465,7 +480,14 @@ async def run_qa_agent(
             "tokens_total": llm._tokens_total,
         }
     finally:
+        # Para o browser
         try:
             await session.stop()
+        except Exception:
+            pass
+        # Apaga o perfil temporário — remove cookies, localStorage, sessões e
+        # qualquer credencial que o Chromium tenha armazenado durante o teste.
+        try:
+            shutil.rmtree(temp_profile_dir, ignore_errors=True)
         except Exception:
             pass
