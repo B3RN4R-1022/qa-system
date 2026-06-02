@@ -1,11 +1,11 @@
 # ============================================================
 #  Nocorp QA Agent — Instalador
-#  Uso: irm https://raw.githubusercontent.com/B3RN4R-1022/qa-system/main/qa-agent/install.ps1 | iex
+#  Uso: irm https://raw.githubusercontent.com/B3RN4R-1022/qa-system/master/qa-agent/install.ps1 | iex
 # ============================================================
 
 $BACKEND_URL   = "https://qa-system-5vpf.onrender.com"   # backend no Render
 $INSTALL_DIR   = "$env:USERPROFILE\NocorpQAAgent"
-$GITHUB_RAW    = "https://raw.githubusercontent.com/B3RN4R-1022/qa-system/main/qa-agent"
+$GITHUB_RAW    = "https://raw.githubusercontent.com/B3RN4R-1022/qa-system/master/qa-agent"
 $SHORTCUT_NAME = "QA Agent - Nocorp"
 
 function Write-Step($msg) { Write-Host "`n  $msg" -ForegroundColor Cyan }
