@@ -292,8 +292,30 @@ def build_llm(cerebras_api_key: str = None):
         return BrowserUseLLM(base_llm, provider_override="groq"), model
 
 
-def build_task(title: str, preview_url: str, criteria: list, project_name: str, knowledge: str, skills: str, description: str = "") -> str:
+def build_task(title: str, preview_url: str, criteria: list, project_name: str, knowledge: str, skills: str, description: str = "", site_cache: str = None) -> str:
     criteria_text = "\n".join(f"- {c}" for c in criteria) if criteria else "- Verificar funcionamento geral da funcionalidade"
+
+    description_section = (
+        f"## Descrição e Requisitos da Funcionalidade\n"
+        f"Use este contexto para entender O QUE foi implementado e O QUE deve ser testado:\n{description}"
+    ) if description else ""
+
+    skills_section = f"## Instruções gerais de QA\n{skills}" if skills else ""
+    knowledge_section = f"## Base de conhecimento do projeto {project_name}\n{knowledge}" if knowledge else ""
+
+    # Seção de cache de site — se existir, a IA pula exploração já conhecida
+    cache_section = ""
+    if site_cache:
+        cache_section = f"""## CONHECIMENTO PRÉVIO DESTE PROJETO ⚡ (use para economizar tempo)
+Você já explorou este site antes. Use este mapa para ir direto ao ponto — não repita buscas já feitas:
+
+{site_cache}
+
+Com base nisso:
+- Pule etapas de exploração que você já conhece (navegação, login, estrutura geral)
+- Vá diretamente à área relacionada ao teste atual
+- Apenas verifique rapidamente se algo mudou nessas áreas já mapeadas
+"""
 
     return f"""Você é um analista de QA testando o sistema da Nocorp.
 
@@ -303,14 +325,16 @@ Acesse esta URL e realize os testes: {preview_url}
 Título: {title}
 Projeto: {project_name or 'Não informado'}
 
-{f"## Descrição e Requisitos da Funcionalidade{chr(10)}Use este contexto para entender O QUE foi implementado e O QUE deve ser testado:{chr(10)}{description}" if description else ""}
+{description_section}
 
 ## Critérios de Aceitação para verificar
 {criteria_text}
 
-{f"## Instruções gerais de QA{chr(10)}{skills}" if skills else ""}
+{skills_section}
 
-{f"## Base de conhecimento do projeto {project_name}{chr(10)}{knowledge}" if knowledge else ""}
+{knowledge_section}
+
+{cache_section}
 
 ## REGRA CRÍTICA — LEIA PRIMEIRO
 🚫 **NUNCA use a ação `navigate`/`go_to_url`.** A página JÁ ESTÁ ABERTA na URL correta.
@@ -347,6 +371,11 @@ Projeto: {project_name or 'Não informado'}
 
 **LEMBRE-SE:** Você já está no site. Só interaja com os elementos. NUNCA navegue.
 
+## Verificação de erros visíveis (faça antes de escrever o relatório)
+- Procure na página por mensagens de erro visíveis (banners vermelhos, toasts, texto com "erro", "falha", "inválido")
+- Verifique se há indicadores de falha de rede (timeouts, spinners travados, dados não carregados)
+- Inclua qualquer erro encontrado na seção ⚠️ AVISOS do relatório
+
 ## Formato obrigatório do relatório final
 Responda SEMPRE em português brasileiro com esta estrutura:
 
@@ -357,12 +386,67 @@ Responda SEMPRE em português brasileiro com esta estrutura:
 - (liste o que falhou)
 
 ⚠️ AVISOS:
-- (comportamentos diferentes do esperado mas não bloqueantes)
+- (comportamentos diferentes do esperado mas não bloqueantes, inclua erros visíveis na página)
 
 🏁 CONCLUSÃO: APROVADO | REPROVADO | SUGESTÃO DE ALTERAÇÃO
 
 📝 OBSERVAÇÕES:
-(detalhes adicionais importantes)"""
+(detalhes adicionais importantes)
+
+## ATUALIZAÇÃO DE CACHE — inclua SEMPRE ao final (o sistema usa para otimizar futuros testes)
+Após o relatório acima, adicione exatamente esta seção com o que você aprendeu sobre o site:
+
+🗃️ CACHE_UPDATE_START
+{{
+  "navigation": "estrutura de navegação que você usou (menus, sidebar, abas, rotas principais)",
+  "loginFlow": "como fazer login: campos encontrados e como interagir (se havia login neste teste)",
+  "knownRoutes": ["URLs que você visitou durante este teste"],
+  "uiPatterns": "componentes e padrões visuais encontrados (cards, tabelas, modais, formulários, tema)",
+  "notes": "qualquer informação útil para acelerar futuros testes neste projeto"
+}}
+🗃️ CACHE_UPDATE_END"""
+
+
+async def _attach_console_listeners(session, console_logs: list):
+    """
+    Background task: aguarda o browser iniciar e anexa listeners de console.
+    Captura erros e warnings da página sem interferir no browser-use.
+    """
+    for _ in range(120):  # tenta por até 60s (120 × 0.5s)
+        await asyncio.sleep(0.5)
+        try:
+            ctx = (
+                getattr(session, 'browser_context', None) or
+                getattr(session, 'context', None) or
+                getattr(session, '_browser_context', None)
+            )
+            if ctx is None:
+                continue
+
+            def _on_console(msg):
+                if msg.type in ('error', 'warning'):
+                    console_logs.append({'type': msg.type, 'text': msg.text})
+
+            def _on_page_error(err):
+                console_logs.append({'type': 'pageerror', 'text': str(err)})
+
+            def _on_new_page(page):
+                page.on('console', _on_console)
+                page.on('pageerror', _on_page_error)
+
+            # Páginas já abertas
+            for page in (ctx.pages or []):
+                page.on('console', _on_console)
+                page.on('pageerror', _on_page_error)
+
+            # Novas páginas que abrirem durante o teste
+            ctx.on('page', _on_new_page)
+            return  # listeners annexados com sucesso
+
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            pass  # browser ainda não iniciou — tenta de novo
 
 
 async def run_qa_agent(
@@ -376,6 +460,7 @@ async def run_qa_agent(
     headless: bool = False,
     max_steps: int = None,
     cerebras_api_key: str = None,
+    site_cache: str = None,
 ) -> dict:
     import tempfile, shutil
 
@@ -391,7 +476,7 @@ async def run_qa_agent(
         browser_profile=BrowserProfile(headless=headless, user_data_dir=temp_profile_dir)
     )
 
-    task_text = build_task(title, preview_url, criteria, project_name, knowledge, skills, description)
+    task_text = build_task(title, preview_url, criteria, project_name, knowledge, skills, description, site_cache=site_cache)
 
     # Imagens disponíveis para o agente fazer upload quando necessário
     import glob as _glob
@@ -450,6 +535,10 @@ async def run_qa_agent(
             f"[Tokens] ══════════════════════════════\n"
         )
 
+    # Lista compartilhada para acumular logs do console (preenchida pelo background task)
+    console_logs = []
+    console_task = asyncio.create_task(_attach_console_listeners(session, console_logs))
+
     try:
         print(f"[QA Agent] 🔢 Max steps: {max_steps}")
         history = await agent.run(max_steps=max_steps)
@@ -464,11 +553,38 @@ async def run_qa_agent(
         if not final:
             final = "Agente concluiu a análise mas não retornou texto estruturado."
 
+        # Extrai atualização de cache do relatório (seção especial)
+        import re as _re
+        cache_update = None
+        cache_match = _re.search(
+            r'🗃️ CACHE_UPDATE_START\s*([\s\S]*?)\s*🗃️ CACHE_UPDATE_END',
+            final or ''
+        )
+        if cache_match:
+            cache_update = cache_match.group(1).strip()
+            final = final[:cache_match.start()].strip()
+            print(f"[QA Agent] 🗃️  Cache do projeto extraído ({len(cache_update)} chars)")
+
+        # Appenda logs de console ao relatório se houver erros relevantes
+        if console_logs:
+            errors   = [l for l in console_logs if l['type'] in ('error', 'pageerror')]
+            warnings = [l for l in console_logs if l['type'] == 'warning']
+            if errors or warnings:
+                lines = ["\n\n🖥️ LOGS DO CONSOLE DURANTE O TESTE:"]
+                if errors:
+                    lines.append(f"🔴 Erros ({len(errors)}):")
+                    lines.extend(f"  - {e['text'][:300]}" for e in errors[:10])
+                if warnings:
+                    lines.append(f"🟡 Avisos ({len(warnings)}):")
+                    lines.extend(f"  - {w['text'][:200]}" for w in warnings[:5])
+                final = (final or '') + '\n'.join(lines)
+
         return {
             "success": True,
             "report": final,
             "steps": len(history.history) if hasattr(history, 'history') else 0,
             "tokens_total": llm._tokens_total,
+            "cache_update": cache_update,
         }
 
     except Exception as e:
@@ -478,8 +594,16 @@ async def run_qa_agent(
             "report": f"Erro durante execução do agente: {str(e)}",
             "steps": 0,
             "tokens_total": llm._tokens_total,
+            "cache_update": None,
         }
     finally:
+        # Cancela o background task de console
+        console_task.cancel()
+        try:
+            await console_task
+        except (asyncio.CancelledError, Exception):
+            pass
+
         # Para o browser
         try:
             await session.stop()

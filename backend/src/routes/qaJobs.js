@@ -50,13 +50,18 @@ router.get('/pending', async (req, res) => {
         return res.json(null)
       }
 
-      const [knowledge, skills] = await Promise.all([
+      const [knowledge, skills, siteCache] = await Promise.all([
         task.projectName
           ? prisma.aIKnowledge.findUnique({
               where: { type_name: { type: 'project', name: task.projectName } }
             }).catch(() => null)
           : Promise.resolve(null),
-        prisma.aIKnowledge.findMany({ where: { type: 'skill' } })
+        prisma.aIKnowledge.findMany({ where: { type: 'skill' } }),
+        task.projectName
+          ? prisma.aIKnowledge.findUnique({
+              where: { type_name: { type: 'site_cache', name: task.projectName } }
+            }).catch(() => null)
+          : Promise.resolve(null),
       ])
 
       const criteria = task.checks?.map(c => c.label) || []
@@ -76,18 +81,24 @@ router.get('/pending', async (req, res) => {
         description: task.description || '',
         knowledge: knowledgeText,
         skills: skillsText,
+        site_cache: siteCache?.content || null,
       })
     } else {
       // dev_test
       const criteria = winner.criteria ? JSON.parse(winner.criteria) : []
 
-      const [knowledge, skills] = await Promise.all([
+      const [knowledge, skills, siteCache] = await Promise.all([
         winner.projectName
           ? prisma.aIKnowledge.findUnique({
               where: { type_name: { type: 'project', name: winner.projectName } }
             }).catch(() => null)
           : Promise.resolve(null),
-        prisma.aIKnowledge.findMany({ where: { type: 'skill' } })
+        prisma.aIKnowledge.findMany({ where: { type: 'skill' } }),
+        winner.projectName
+          ? prisma.aIKnowledge.findUnique({
+              where: { type_name: { type: 'site_cache', name: winner.projectName } }
+            }).catch(() => null)
+          : Promise.resolve(null),
       ])
 
       const knowledgeText = knowledge?.content || ''
@@ -106,6 +117,7 @@ router.get('/pending', async (req, res) => {
         description: winner.description,
         knowledge: knowledgeText,
         skills: skillsText,
+        site_cache: siteCache?.content || null,
       })
     }
   } catch (err) {
@@ -141,31 +153,47 @@ router.post('/:id/claim', async (req, res) => {
 })
 
 // POST /qa-jobs/:id/result — salva o resultado final da análise
-// Body: { status, report, tokensUsed, type }
+// Body: { status, report, tokensUsed, type, siteCache?, projectName? }
 router.post('/:id/result', async (req, res) => {
-  const { status, report, tokensUsed, type } = req.body || {}
+  const { status, report, tokensUsed, type, siteCache, projectName } = req.body || {}
   try {
+    const ops = []
+
     if (type === 'dev_test') {
-      await prisma.devTest.update({
+      ops.push(prisma.devTest.update({
         where: { id: req.params.id },
         data: {
           status: status === 'error' ? 'error' : 'done',
           report: report || 'Sem resultado',
           tokensUsed: tokensUsed || null,
         }
-      })
+      }))
     } else {
-      await prisma.aIReport.update({
+      ops.push(prisma.aIReport.update({
         where: { taskId: req.params.id },
         data: {
           status: status === 'error' ? 'error' : 'done',
           report: report || 'Sem resultado',
           tokensUsed: tokensUsed || null,
         }
-      })
+      }))
     }
+
+    // Salva o cache de site atualizado pelo agente, se houver
+    if (siteCache && projectName) {
+      ops.push(
+        prisma.aIKnowledge.upsert({
+          where: { type_name: { type: 'site_cache', name: projectName } },
+          create: { type: 'site_cache', name: projectName, content: siteCache },
+          update: { content: siteCache }
+        })
+      )
+    }
+
+    await Promise.all(ops)
     res.json({ ok: true })
   } catch (err) {
+    console.error('[qa-jobs/result]', err)
     res.status(500).json({ error: 'Erro ao salvar resultado' })
   }
 })

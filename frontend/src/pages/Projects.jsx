@@ -1,0 +1,343 @@
+import { useState, useEffect } from 'react'
+import { useNavigate } from 'react-router-dom'
+import API from '@/lib/api'
+
+const token = () => localStorage.getItem('qa_token')
+
+function relativeDate(dateStr) {
+  if (!dateStr) return null
+  const diff = Date.now() - new Date(dateStr).getTime()
+  const m = Math.floor(diff / 60000)
+  if (m < 2) return 'agora'
+  if (m < 60) return `${m}min atrás`
+  const h = Math.floor(m / 60)
+  if (h < 24) return `${h}h atrás`
+  const d = Math.floor(h / 24)
+  if (d < 30) return `${d}d atrás`
+  return new Date(dateStr).toLocaleDateString('pt-BR')
+}
+
+function CacheCard({ project, onClearCache }) {
+  const [expanded, setExpanded] = useState(false)
+  const [cacheContent, setCacheContent] = useState(null)
+  const [loadingCache, setLoadingCache] = useState(false)
+  const [clearing, setClearing] = useState(false)
+
+  async function loadCache() {
+    if (cacheContent !== null) { setExpanded(e => !e); return }
+    setLoadingCache(true)
+    try {
+      const res = await fetch(`${API}/projects/${encodeURIComponent(project.name)}/cache`, {
+        headers: { Authorization: `Bearer ${token()}` }
+      })
+      const data = await res.json()
+      setCacheContent(data?.content || null)
+      setExpanded(true)
+    } catch {
+      setCacheContent(null)
+    } finally {
+      setLoadingCache(false)
+    }
+  }
+
+  async function clearCache() {
+    if (!confirm(`Limpar cache do projeto "${project.name}"? A próxima análise vai re-explorar o site do zero.`)) return
+    setClearing(true)
+    try {
+      await fetch(`${API}/projects/${encodeURIComponent(project.name)}/cache`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token()}` }
+      })
+      onClearCache(project.name)
+    } catch {
+      alert('Erro ao limpar cache')
+    } finally {
+      setClearing(false)
+    }
+  }
+
+  let parsed = null
+  if (cacheContent) {
+    try { parsed = JSON.parse(cacheContent) } catch { parsed = null }
+  }
+
+  return (
+    <div className="bg-white dark:bg-gray-900 border border-gray-100 dark:border-gray-800 rounded-2xl p-5 shadow-sm hover:shadow-md transition-shadow">
+      {/* Header do card */}
+      <div className="flex items-start justify-between gap-3 mb-3">
+        <div className="flex items-center gap-3 min-w-0">
+          <div className="w-10 h-10 rounded-xl bg-indigo-50 dark:bg-indigo-900/30 flex items-center justify-center shrink-0">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} className="w-5 h-5 text-indigo-600 dark:text-indigo-400">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+            </svg>
+          </div>
+          <div className="min-w-0">
+            <h3 className="font-semibold text-gray-900 dark:text-white text-sm truncate">{project.name}</h3>
+            <div className="flex items-center gap-2 mt-0.5 flex-wrap">
+              <span className="text-xs text-gray-400">
+                {project.testCount} {project.testCount === 1 ? 'teste' : 'testes'}
+              </span>
+              {project.lastActivity && (
+                <>
+                  <span className="text-gray-200 dark:text-gray-700">·</span>
+                  <span className="text-xs text-gray-400">{relativeDate(project.lastActivity)}</span>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* Badge de cache */}
+        <div className="shrink-0">
+          {project.hasCache ? (
+            <span className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-400 text-[11px] font-medium border border-emerald-200 dark:border-emerald-800">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="w-3 h-3">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+              Cache ativo
+            </span>
+          ) : (
+            <span className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-gray-50 dark:bg-gray-800 text-gray-400 text-[11px] font-medium border border-gray-200 dark:border-gray-700">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="w-3 h-3">
+                <circle cx="12" cy="12" r="9" />
+                <path strokeLinecap="round" d="M12 8v4M12 16h.01" />
+              </svg>
+              Sem cache
+            </span>
+          )}
+        </div>
+      </div>
+
+      {/* Cache atualizado em */}
+      {project.hasCache && project.cacheUpdatedAt && (
+        <p className="text-[11px] text-gray-400 mb-3">
+          Cache atualizado {relativeDate(project.cacheUpdatedAt)}
+        </p>
+      )}
+
+      {/* Ações */}
+      <div className="flex items-center gap-2 flex-wrap">
+        {project.hasCache && (
+          <>
+            <button
+              onClick={loadCache}
+              disabled={loadingCache}
+              className="text-xs text-indigo-600 dark:text-indigo-400 hover:text-indigo-800 dark:hover:text-indigo-200 transition-colors underline"
+            >
+              {loadingCache ? 'Carregando...' : expanded ? 'Ocultar cache' : 'Ver cache'}
+            </button>
+            <span className="text-gray-200 dark:text-gray-700 text-xs">·</span>
+            <button
+              onClick={clearCache}
+              disabled={clearing}
+              className="text-xs text-red-400 hover:text-red-600 dark:hover:text-red-300 transition-colors underline"
+            >
+              {clearing ? 'Limpando...' : 'Limpar cache'}
+            </button>
+          </>
+        )}
+      </div>
+
+      {/* Conteúdo expandido do cache */}
+      {expanded && cacheContent && (
+        <div className="mt-3 rounded-xl bg-gray-50 dark:bg-gray-800 border border-gray-100 dark:border-gray-700 p-3">
+          {parsed ? (
+            <div className="space-y-2">
+              {parsed.navigation && (
+                <div>
+                  <p className="text-[11px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-0.5">Navegação</p>
+                  <p className="text-xs text-gray-700 dark:text-gray-300 leading-relaxed">{parsed.navigation}</p>
+                </div>
+              )}
+              {parsed.loginFlow && (
+                <div>
+                  <p className="text-[11px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-0.5">Fluxo de Login</p>
+                  <p className="text-xs text-gray-700 dark:text-gray-300 leading-relaxed">{parsed.loginFlow}</p>
+                </div>
+              )}
+              {parsed.knownRoutes?.length > 0 && (
+                <div>
+                  <p className="text-[11px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-1">Rotas conhecidas</p>
+                  <div className="flex flex-wrap gap-1">
+                    {parsed.knownRoutes.map((r, i) => (
+                      <span key={i} className="text-[11px] px-2 py-0.5 rounded-md bg-white dark:bg-gray-700 border border-gray-200 dark:border-gray-600 text-gray-600 dark:text-gray-300 font-mono">
+                        {r}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {parsed.uiPatterns && (
+                <div>
+                  <p className="text-[11px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-0.5">Padrões de UI</p>
+                  <p className="text-xs text-gray-700 dark:text-gray-300 leading-relaxed">{parsed.uiPatterns}</p>
+                </div>
+              )}
+              {parsed.notes && (
+                <div>
+                  <p className="text-[11px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-0.5">Notas</p>
+                  <p className="text-xs text-gray-700 dark:text-gray-300 leading-relaxed">{parsed.notes}</p>
+                </div>
+              )}
+            </div>
+          ) : (
+            <pre className="text-xs text-gray-700 dark:text-gray-300 whitespace-pre-wrap font-mono">{cacheContent}</pre>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+export default function Projects() {
+  const navigate = useNavigate()
+  const [projects, setProjects] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [search, setSearch] = useState('')
+
+  useEffect(() => { loadProjects() }, [])
+
+  async function loadProjects() {
+    try {
+      const res = await fetch(`${API}/projects`, {
+        headers: { Authorization: `Bearer ${token()}` }
+      })
+      const data = await res.json()
+      setProjects(Array.isArray(data) ? data : [])
+    } catch {
+      setProjects([])
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  function handleClearCache(projectName) {
+    setProjects(prev => prev.map(p =>
+      p.name === projectName
+        ? { ...p, hasCache: false, cacheUpdatedAt: null }
+        : p
+    ))
+  }
+
+  const filtered = projects.filter(p =>
+    p.name.toLowerCase().includes(search.toLowerCase())
+  )
+
+  const withCache    = projects.filter(p => p.hasCache).length
+  const withoutCache = projects.filter(p => !p.hasCache).length
+
+  return (
+    <div className="min-h-screen bg-gray-50 dark:bg-gray-950 p-6">
+      {/* Header */}
+      <div className="max-w-4xl mx-auto">
+        <div className="flex items-center justify-between mb-6">
+          <div>
+            <h1 className="text-xl font-bold text-gray-900 dark:text-white">Projetos</h1>
+            <p className="text-sm text-gray-400 mt-0.5">
+              Cache de conhecimento da IA por projeto — evita re-explorar o mesmo site
+            </p>
+          </div>
+          <button
+            onClick={() => navigate('/chat')}
+            className="flex items-center gap-2 px-4 py-2 rounded-xl bg-black dark:bg-white text-white dark:text-black text-sm font-medium hover:opacity-80 transition-opacity"
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="w-4 h-4">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
+            </svg>
+            Novo teste
+          </button>
+        </div>
+
+        {/* Stats rápidas */}
+        {!loading && projects.length > 0 && (
+          <div className="grid grid-cols-3 gap-3 mb-5">
+            <div className="bg-white dark:bg-gray-900 border border-gray-100 dark:border-gray-800 rounded-xl p-4 text-center">
+              <p className="text-2xl font-bold text-gray-900 dark:text-white">{projects.length}</p>
+              <p className="text-xs text-gray-400 mt-0.5">Projetos</p>
+            </div>
+            <div className="bg-white dark:bg-gray-900 border border-gray-100 dark:border-gray-800 rounded-xl p-4 text-center">
+              <p className="text-2xl font-bold text-emerald-600 dark:text-emerald-400">{withCache}</p>
+              <p className="text-xs text-gray-400 mt-0.5">Com cache ativo</p>
+            </div>
+            <div className="bg-white dark:bg-gray-900 border border-gray-100 dark:border-gray-800 rounded-xl p-4 text-center">
+              <p className="text-2xl font-bold text-gray-400">{withoutCache}</p>
+              <p className="text-xs text-gray-400 mt-0.5">Sem cache</p>
+            </div>
+          </div>
+        )}
+
+        {/* Busca */}
+        {projects.length > 4 && (
+          <div className="mb-4">
+            <input
+              type="text"
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              placeholder="Buscar projeto..."
+              className="w-full max-w-xs text-sm bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-xl px-4 py-2.5 text-gray-900 dark:text-gray-100 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            />
+          </div>
+        )}
+
+        {/* Lista de projetos */}
+        {loading ? (
+          <div className="flex items-center justify-center py-20">
+            <p className="text-sm text-gray-400">Carregando projetos...</p>
+          </div>
+        ) : filtered.length === 0 ? (
+          <div className="flex flex-col items-center justify-center py-20 text-center">
+            <div className="w-16 h-16 rounded-2xl bg-gray-100 dark:bg-gray-800 flex items-center justify-center mb-4">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className="w-8 h-8 text-gray-400">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+              </svg>
+            </div>
+            <p className="text-gray-500 dark:text-gray-400 font-medium">
+              {search ? 'Nenhum projeto encontrado' : 'Nenhum projeto ainda'}
+            </p>
+            <p className="text-sm text-gray-400 mt-1">
+              {search ? 'Tente outro termo de busca' : 'Execute um teste com /teste-qa para criar o primeiro projeto'}
+            </p>
+            {!search && (
+              <button
+                onClick={() => navigate('/chat')}
+                className="mt-4 px-4 py-2 rounded-xl bg-black dark:bg-white text-white dark:text-black text-sm font-medium hover:opacity-80 transition-opacity"
+              >
+                Ir para o Chat
+              </button>
+            )}
+          </div>
+        ) : (
+          <div className="grid gap-3 md:grid-cols-2">
+            {filtered.map(project => (
+              <CacheCard
+                key={project.name}
+                project={project}
+                onClearCache={handleClearCache}
+              />
+            ))}
+          </div>
+        )}
+
+        {/* Info sobre o cache */}
+        {!loading && projects.some(p => p.hasCache) && (
+          <div className="mt-6 p-4 rounded-xl bg-indigo-50 dark:bg-indigo-900/10 border border-indigo-200 dark:border-indigo-800">
+            <div className="flex gap-3">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} className="w-4 h-4 text-indigo-500 shrink-0 mt-0.5">
+                <circle cx="12" cy="12" r="9" />
+                <path strokeLinecap="round" d="M12 8v4M12 16h.01" />
+              </svg>
+              <div>
+                <p className="text-xs font-medium text-indigo-700 dark:text-indigo-400">Como funciona o cache</p>
+                <p className="text-xs text-indigo-600/70 dark:text-indigo-400/70 mt-0.5 leading-relaxed">
+                  Após cada teste, a IA salva o que aprendeu sobre o site (navegação, login, componentes, rotas).
+                  No próximo teste do mesmo projeto, ela usa esse mapa para ir direto ao ponto sem re-explorar tudo.
+                  Limpe o cache se o site teve mudanças estruturais significativas.
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}

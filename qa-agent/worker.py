@@ -235,8 +235,10 @@ async def _watch_cancellation(client, backend_url, headers, task_id, job_type):
 # ─── Execução de um job ───────────────────────────────────────────────────────
 
 async def run_job(client, backend_url, headers, job, cerebras_key):
-    task_id  = job["task_id"]
-    job_type = job.get("type", "qa_task")
+    task_id      = job["task_id"]
+    job_type     = job.get("type", "qa_task")
+    project_name = job.get("project_name", "")
+    site_cache   = job.get("site_cache")  # conhecimento prévio do site (pode ser None)
 
     # Reivindica o job (queued → running)
     r = await client.post(
@@ -252,6 +254,9 @@ async def run_job(client, backend_url, headers, job, cerebras_key):
     work(f"Iniciando: {job['title']}")
     info(f"URL    : {job['preview_url']}")
     info(f"Tipo   : {'Task Asana' if job_type == 'qa_task' else 'Teste Dev'}")
+    if project_name:
+        cache_status = "✅ cache disponível" if site_cache else "⬜ sem cache (será criado)"
+        info(f"Projeto: {project_name}  [{cache_status}]")
     criterios = job.get("criteria", [])
     if criterios:
         info(f"Critérios: {len(criterios)} item(s)")
@@ -264,12 +269,13 @@ async def run_job(client, backend_url, headers, job, cerebras_key):
         title=job["title"],
         preview_url=job["preview_url"],
         criteria=criterios,
-        project_name=job.get("project_name", ""),
+        project_name=project_name,
         description=job.get("description", ""),
         knowledge=job.get("knowledge", ""),
         skills=job.get("skills", ""),
         headless=False,
         cerebras_api_key=cerebras_key,
+        site_cache=site_cache,
     ))
     timer_task  = asyncio.create_task(_live_timer(job["title"]))
     cancel_task = asyncio.create_task(
@@ -308,12 +314,22 @@ async def run_job(client, backend_url, headers, job, cerebras_key):
 
     # ── Agente terminou (normal ou erro) ──────────────────────────────────
     try:
-        result = agent_task.result()
-        status = "done" if result["success"] else "error"
-        report = result["report"]
-        tokens = result.get("tokens_total")
+        result       = agent_task.result()
+        status       = "done" if result["success"] else "error"
+        report       = result["report"]
+        tokens       = result.get("tokens_total")
+        cache_update = result.get("cache_update")  # novo campo — cache do site
     except Exception as e:
-        status, report, tokens = "error", f"Erro inesperado no agente: {e}", None
+        status, report, tokens, cache_update = "error", f"Erro inesperado no agente: {e}", None, None
+
+    if cache_update and project_name:
+        info(f"🗃️  Cache do projeto '{project_name}' será atualizado.")
+
+    # Monta body do resultado
+    result_body = {"status": status, "report": report, "tokensUsed": tokens, "type": job_type}
+    if cache_update and project_name:
+        result_body["siteCache"]    = cache_update
+        result_body["projectName"]  = project_name
 
     # Envia resultado
     sys.stdout.write("  /  Enviando relatório...")
@@ -322,7 +338,7 @@ async def run_job(client, backend_url, headers, job, cerebras_key):
         await client.post(
             f"{backend_url}/qa-jobs/{task_id}/result",
             headers=headers,
-            json={"status": status, "report": report, "tokensUsed": tokens, "type": job_type},
+            json=result_body,
         )
         _clear_line()
     except Exception as e:

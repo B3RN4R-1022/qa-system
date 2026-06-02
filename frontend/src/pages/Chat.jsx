@@ -106,7 +106,7 @@ const EMPTY_FORM = {
   notes: '',
 }
 
-function TestForm({ form, onChange, onSubmit, onCancel, submitting, formError }) {
+function TestForm({ form, onChange, onSubmit, onCancel, submitting, formError, existingProjects }) {
   function updateCriteria(idx, val) {
     const next = [...form.criteria]
     next[idx] = val
@@ -162,11 +162,23 @@ function TestForm({ form, onChange, onSubmit, onCancel, submitting, formError })
           <div>
             <label className="text-xs font-medium text-gray-500 dark:text-gray-400 block mb-1">Projeto</label>
             <input
+              list="qa-projects-list"
               className={inp}
-              placeholder="Nome do projeto"
+              placeholder="Selecione ou digite o nome"
               value={form.projectName}
               onChange={e => onChange('projectName', e.target.value)}
             />
+            <datalist id="qa-projects-list">
+              {(existingProjects || []).map(p => (
+                <option key={p.name} value={p.name} />
+              ))}
+            </datalist>
+            {form.projectName && (existingProjects || []).some(p => p.name === form.projectName && p.hasCache) && (
+              <p className="text-[11px] text-emerald-600 dark:text-emerald-400 mt-0.5 flex items-center gap-1">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} className="w-3 h-3"><path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" /></svg>
+                Cache disponível — a IA vai usar o mapa deste site
+              </p>
+            )}
           </div>
         </div>
 
@@ -452,6 +464,7 @@ export default function Chat() {
   const [qaFlow, setQaFlow] = useState(null)
   const [qaForm, setQaForm] = useState(EMPTY_FORM)
   const [qaFormError, setQaFormError] = useState(null)
+  const [existingProjects, setExistingProjects] = useState([])
 
   const bottomRef = useRef(null)
   const inputRef = useRef(null)
@@ -513,6 +526,11 @@ export default function Chat() {
       setQaForm(EMPTY_FORM)
       setQaFormError(null)
       setQaFlow({ phase: 'form', testId: null, report: null, tokensUsed: null })
+      // Carrega projetos existentes para o seletor
+      fetch(`${API}/projects`, { headers: { Authorization: `Bearer ${token}` } })
+        .then(r => r.json())
+        .then(data => setExistingProjects(Array.isArray(data) ? data : []))
+        .catch(() => {})
       return
     }
 
@@ -672,7 +690,7 @@ export default function Chat() {
           <div>
             <h1 className="font-semibold text-gray-900 dark:text-white text-sm leading-tight">Agente de QA</h1>
             <p className="text-[11px] text-gray-400 leading-tight">
-              Powered by Groq · Digite <code className="bg-gray-100 dark:bg-gray-800 px-1 rounded text-blue-600 dark:text-blue-400">/teste-qa</code> para executar um teste automatizado
+              Powered by Cerebras · Digite <code className="bg-gray-100 dark:bg-gray-800 px-1 rounded text-blue-600 dark:text-blue-400">/teste-qa</code> para executar um teste automatizado
             </p>
           </div>
         </div>
@@ -766,6 +784,7 @@ export default function Chat() {
                     onCancel={cancelQaTest}
                     submitting={qaFlow.phase === 'submitting'}
                     formError={qaFormError}
+                    existingProjects={existingProjects}
                   />
                 )}
                 {(qaFlow.phase === 'queued' || qaFlow.phase === 'running') && (
@@ -833,7 +852,7 @@ export default function Chat() {
           </button>
         </div>
         <p className="text-center text-[11px] text-gray-400 dark:text-gray-600 mt-1.5">
-          Powered by Groq · Llama 3.3 70B · histórico salvo para contexto entre sessões
+          Powered by Cerebras · gpt-oss-120b · histórico salvo para contexto entre sessões
         </p>
       </div>
     </div>

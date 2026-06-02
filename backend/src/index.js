@@ -15,6 +15,7 @@ const aiqaRouter = require('./routes/aiqa')
 const settingsRouter = require('./routes/settings')
 const qaJobsRouter = require('./routes/qaJobs')
 const devTestsRouter = require('./routes/devTests')
+const projectsRouter = require('./routes/projects')
 const authMiddleware = require('./middleware/auth')
 
 const app = express()
@@ -39,6 +40,7 @@ app.use('/tasks/:id/run-ai-qa', authMiddleware, aiqaRouter)
 app.use('/settings', authMiddleware, settingsRouter)
 app.use('/qa-jobs', authMiddleware, qaJobsRouter)
 app.use('/dev-tests', authMiddleware, devTestsRouter)
+app.use('/projects', authMiddleware, projectsRouter)
 
 app.get('/', (req, res) => {
   res.json({ status: 'ok', message: 'QA System rodando' })
