@@ -73,13 +73,14 @@ foreach ($file in $files) {
 
 # ── 4. Ambiente virtual ──────────────────────────────────────
 Write-Step "Criando ambiente virtual Python..."
-if (-not (Test-Path "$INSTALL_DIR\venv")) {
-    & $python -m venv "$INSTALL_DIR\venv"
-    if ($LASTEXITCODE -ne 0) { Stop-OnError "Falha ao criar ambiente virtual." }
-    Write-OK "Ambiente virtual criado"
-} else {
-    Write-OK "Ambiente virtual já existe"
+# Sempre recria para garantir instalação limpa (evita conflitos de versão)
+if (Test-Path "$INSTALL_DIR\venv") {
+    Write-Info "Recriando ambiente virtual para garantir instalação limpa..."
+    Remove-Item -Recurse -Force "$INSTALL_DIR\venv"
 }
+& $python -m venv "$INSTALL_DIR\venv"
+if ($LASTEXITCODE -ne 0) { Stop-OnError "Falha ao criar ambiente virtual." }
+Write-OK "Ambiente virtual criado"
 
 # ── 5. Dependências ──────────────────────────────────────────
 Write-Step "Instalando dependências (pode demorar 1-2 minutos)..."
