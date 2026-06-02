@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import { Link } from 'react-router-dom'
 import API from '@/lib/api'
 import { NocorpLogo } from '@/components/NocorpLogo'
+import AgentInstallButton from '@/components/AgentInstallButton'
 
 // ─── Helpers de texto ────────────────────────────────────────────────────────
 
@@ -694,7 +695,8 @@ export default function Chat() {
             </p>
           </div>
         </div>
-        <div className="flex items-center gap-4">
+        <div className="flex items-center gap-3">
+          <AgentInstallButton />
           {messages.length > 0 && (
             <button onClick={clearHistory} className="text-xs text-gray-400 hover:text-red-500 dark:hover:text-red-400 transition-colors">
               Limpar histórico

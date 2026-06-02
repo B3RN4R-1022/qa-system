@@ -3,6 +3,7 @@ import { Link, useNavigate } from 'react-router-dom'
 import API from '@/lib/api'
 import { NocorpLogo } from '@/components/NocorpLogo'
 import { useAuth } from '@/contexts/AuthContext'
+import AgentInstallButton from '@/components/AgentInstallButton'
 
 // Renderiza markdown básico
 function parseBold(text) {
@@ -234,7 +235,8 @@ export default function DevTests() {
             </p>
           )}
         </div>
-        <div className="flex items-center gap-4">
+        <div className="flex items-center gap-3">
+          <AgentInstallButton />
           <button
             onClick={() => navigate('/chat')}
             className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-sm font-medium transition-colors"
