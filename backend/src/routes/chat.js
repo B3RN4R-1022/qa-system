@@ -37,6 +37,7 @@ Formato das respostas:
 router.get('/history', async (req, res) => {
   try {
     const messages = await prisma.chatMessage.findMany({
+      where: { userId: req.user.id },
       orderBy: { createdAt: 'asc' },
       take: 100
     })
@@ -58,11 +59,11 @@ router.post('/message', async (req, res) => {
 
   try {
     // Salva mensagem do usuário
-    await prisma.chatMessage.create({ data: { role: 'user', content: content.trim() } })
+    await prisma.chatMessage.create({ data: { userId: req.user.id, role: 'user', content: content.trim() } })
 
-    // Busca histórico e base de conhecimento em paralelo
+    // Busca histórico (só deste usuário) e base de conhecimento em paralelo
     const [history, knowledge] = await Promise.all([
-      prisma.chatMessage.findMany({ orderBy: { createdAt: 'asc' }, take: 50 }),
+      prisma.chatMessage.findMany({ where: { userId: req.user.id }, orderBy: { createdAt: 'asc' }, take: 50 }),
       prisma.aIKnowledge.findMany({ orderBy: [{ type: 'asc' }, { name: 'asc' }] })
     ])
 
@@ -122,7 +123,7 @@ router.post('/message', async (req, res) => {
 
     // Salva resposta do assistente
     const saved = await prisma.chatMessage.create({
-      data: { role: 'assistant', content: reply }
+      data: { userId: req.user.id, role: 'assistant', content: reply }
     })
 
     res.json({ message: saved })
@@ -132,10 +133,12 @@ router.post('/message', async (req, res) => {
   }
 })
 
-// DELETE /chat/history — limpa todo o histórico
+// DELETE /chat/history — limpa histórico do usuário logado
 router.delete('/history', async (req, res) => {
   try {
-    const { count } = await prisma.chatMessage.deleteMany()
+    const { count } = await prisma.chatMessage.deleteMany({
+      where: { userId: req.user.id }
+    })
     res.json({ ok: true, deletados: count })
   } catch (err) {
     res.status(500).json({ error: 'Erro ao limpar histórico' })
