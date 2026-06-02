@@ -1,7 +1,7 @@
 browser-use==0.12.9
-python-dotenv==1.0.1
-langchain-groq==0.2.3
+python-dotenv
+langchain-groq
 langchain-openai
-langchain-ollama==1.1.0
+langchain-ollama
 langchain-core
 httpx
