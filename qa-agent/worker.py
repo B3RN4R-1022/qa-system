@@ -9,6 +9,7 @@ Fluxo:
   3. Fica ouvindo o backend: a cada 5s pergunta "tem análise para fazer?"
      → quando tem, abre o Chromium e executa o teste
      → envia o relatório de volta
+     → se o usuário cancelar no frontend, para imediatamente
 
 Sem ngrok, sem servidor exposto. A conexão sempre sai desta máquina.
 """
@@ -26,10 +27,11 @@ from agent import run_qa_agent
 
 load_dotenv()
 
-LOCAL_VERSION = "1.1.0"
+LOCAL_VERSION = "1.2.0"
 DEFAULT_BACKEND = os.getenv("BACKEND_URL", "https://qa-system-5vpf.onrender.com").rstrip("/")
 VERSION_URL = "https://raw.githubusercontent.com/B3RN4R-1022/qa-system/master/qa-agent/version.txt"
-POLL_INTERVAL = 5  # segundos
+POLL_INTERVAL  = 5   # segundos entre polls de jobs
+CANCEL_INTERVAL = 5  # segundos entre polls de cancelamento
 
 SPINNER = ['|', '/', '-', '\\']
 
@@ -100,7 +102,6 @@ async def do_login(client, backend_url):
     email = input("  Email: ").strip()
     password = getpass.getpass("  Senha: ")
 
-    # Mostra spinner enquanto aguarda resposta
     sys.stdout.write("  /  Verificando credenciais...")
     sys.stdout.flush()
     try:
@@ -121,7 +122,6 @@ async def do_login(client, backend_url):
 
     data = r.json()
 
-    # Segundo fator (Google Authenticator)
     if data.get("requiresTotp"):
         print()
         code = input("  Código do autenticador (6 dígitos): ").strip()
@@ -141,7 +141,6 @@ async def do_login(client, backend_url):
 
 
 async def token_valid(client, backend_url, jwt):
-    """Confere se o JWT salvo ainda é válido."""
     try:
         r = await client.get(
             f"{backend_url}/qa-jobs/pending",
@@ -178,19 +177,59 @@ def ensure_cerebras_key(session_data):
 # ─── Timer ao vivo durante execução ───────────────────────────────────────────
 
 async def _live_timer(title):
-    """Mostra spinner + tempo decorrido enquanto o agente trabalha."""
     start = time.time()
-    spin = 0
-    short_title = title[:35] + '…' if len(title) > 35 else title
+    spin  = 0
+    short = title[:35] + '…' if len(title) > 35 else title
     try:
         while True:
             elapsed = int(time.time() - start)
             m, s = divmod(elapsed, 60)
-            _spin(spin, f"Analisando: {short_title}  [{m:02d}:{s:02d}]")
+            _spin(spin, f"Analisando: {short}  [{m:02d}:{s:02d}]")
             spin += 1
             await asyncio.sleep(0.3)
     except asyncio.CancelledError:
         pass
+
+
+# ─── Watcher de cancelamento ──────────────────────────────────────────────────
+
+async def _watch_cancellation(client, backend_url, headers, task_id, job_type):
+    """
+    Verifica a cada CANCEL_INTERVAL segundos se o job ainda existe no backend.
+    Retorna quando o job for cancelado/deletado pelo usuário no frontend.
+    """
+    await asyncio.sleep(CANCEL_INTERVAL)  # primeira verificação após alguns segundos
+
+    while True:
+        try:
+            if job_type == 'dev_test':
+                r = await client.get(
+                    f"{backend_url}/dev-tests/{task_id}",
+                    headers=headers, timeout=8
+                )
+                if r.status_code == 404:
+                    return  # deletado pelo usuário
+                data = r.json()
+                if data and data.get('status') not in ('running', 'queued'):
+                    return  # mudou de estado inesperadamente
+
+            else:  # qa_task
+                r = await client.get(
+                    f"{backend_url}/tasks/{task_id}/ai-report",
+                    headers=headers, timeout=8
+                )
+                data = r.json()
+                if data is None:
+                    return  # AIReport deletado (clearAiReport no frontend)
+                if data.get('status') not in ('running',):
+                    return  # status mudou (ex: foi sobrescrito)
+
+        except asyncio.CancelledError:
+            raise  # propaga cancelamento normalmente
+        except Exception:
+            pass  # erro de rede — continua verificando
+
+        await asyncio.sleep(CANCEL_INTERVAL)
 
 
 # ─── Execução de um job ───────────────────────────────────────────────────────
@@ -199,7 +238,7 @@ async def run_job(client, backend_url, headers, job, cerebras_key):
     task_id  = job["task_id"]
     job_type = job.get("type", "qa_task")
 
-    # Reivindica o job (queued → running) — evita execução dupla
+    # Reivindica o job (queued → running)
     r = await client.post(
         f"{backend_url}/qa-jobs/{task_id}/claim",
         headers=headers,
@@ -220,35 +259,63 @@ async def run_job(client, backend_url, headers, job, cerebras_key):
     info("Abrindo Chromium — aguarde...")
     print()
 
-    # Inicia timer ao vivo
-    timer = asyncio.create_task(_live_timer(job["title"]))
+    # Roda agente + watcher de cancelamento em paralelo
+    agent_task  = asyncio.create_task(run_qa_agent(
+        title=job["title"],
+        preview_url=job["preview_url"],
+        criteria=criterios,
+        project_name=job.get("project_name", ""),
+        description=job.get("description", ""),
+        knowledge=job.get("knowledge", ""),
+        skills=job.get("skills", ""),
+        headless=False,
+        cerebras_api_key=cerebras_key,
+    ))
+    timer_task  = asyncio.create_task(_live_timer(job["title"]))
+    cancel_task = asyncio.create_task(
+        _watch_cancellation(client, backend_url, headers, task_id, job_type)
+    )
 
     try:
-        result = await run_qa_agent(
-            title=job["title"],
-            preview_url=job["preview_url"],
-            criteria=criterios,
-            project_name=job.get("project_name", ""),
-            description=job.get("description", ""),
-            knowledge=job.get("knowledge", ""),
-            skills=job.get("skills", ""),
-            headless=False,
-            cerebras_api_key=cerebras_key,
+        done, pending = await asyncio.wait(
+            {agent_task, cancel_task},
+            return_when=asyncio.FIRST_COMPLETED
         )
+
+        # Cancela a task que ainda está pendente
+        for t in pending:
+            t.cancel()
+            try:
+                await t
+            except (asyncio.CancelledError, Exception):
+                pass
+
+    finally:
+        timer_task.cancel()
+        try:
+            await timer_task
+        except asyncio.CancelledError:
+            pass
+        _clear_line()
+
+    # ── Usuário cancelou ──────────────────────────────────────────────────
+    if cancel_task in done and agent_task not in done:
+        print()
+        info("Análise cancelada pelo usuário.")
+        print("  ─────────────────────────────────────────────")
+        print()
+        return  # volta ao loop de polling sem postar resultado
+
+    # ── Agente terminou (normal ou erro) ──────────────────────────────────
+    try:
+        result = agent_task.result()
         status = "done" if result["success"] else "error"
         report = result["report"]
         tokens = result.get("tokens_total")
     except Exception as e:
         status, report, tokens = "error", f"Erro inesperado no agente: {e}", None
-    finally:
-        timer.cancel()
-        try:
-            await timer
-        except asyncio.CancelledError:
-            pass
-        _clear_line()
 
-    # Envia o resultado de volta
+    # Envia resultado
     sys.stdout.write("  /  Enviando relatório...")
     sys.stdout.flush()
     try:
@@ -274,12 +341,11 @@ async def run_job(client, backend_url, headers, job, cerebras_key):
 
 async def main():
     banner()
-    backend_url   = DEFAULT_BACKEND
-    session_data  = sess.load()
+    backend_url  = DEFAULT_BACKEND
+    session_data = sess.load()
 
     async with httpx.AsyncClient(timeout=httpx.Timeout(30.0, read=600.0)) as client:
 
-        # Verifica/aguarda o backend (Render pode estar dormindo)
         info("Conectando ao backend...")
         await wait_for_backend(client, f"{backend_url}/")
         ok("Backend online.")
@@ -324,14 +390,13 @@ async def main():
         print("  └─────────────────────────────────────────┘")
         print()
 
-        spin_idx       = 0
-        retry_count    = 0
-        MAX_RETRY_MSG  = 3  # mostra mensagem de reconexão após N falhas seguidas
+        spin_idx    = 0
+        retry_count = 0
 
         while True:
             try:
                 r = await client.get(f"{backend_url}/qa-jobs/pending", headers=headers)
-                retry_count = 0  # conexão ok — reseta contador
+                retry_count = 0
 
                 if r.status_code == 401:
                     _clear_line()
@@ -349,12 +414,11 @@ async def main():
 
             except httpx.RequestError:
                 retry_count += 1
-                if retry_count >= MAX_RETRY_MSG:
+                if retry_count >= 3:
                     _spin(spin_idx, "Reconectando ao backend...")
-                    spin_idx += 1
                 else:
                     _spin(spin_idx, "Aguardando análises...")
-                    spin_idx += 1
+                spin_idx += 1
 
             except Exception as e:
                 _clear_line()
