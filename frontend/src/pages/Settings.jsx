@@ -323,6 +323,150 @@ function KnowledgeSection({ items, onSave, onDelete }) {
   )
 }
 
+// ─── Seção: Configuração de IA ─────────────────────────────────────────────────
+function AIConfigSection() {
+  const [config, setConfig] = useState(null)
+  const [keyInput, setKeyInput] = useState('')
+  const [showKey, setShowKey] = useState(false)
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+  const [msg, setMsg] = useState(null)
+
+  useEffect(() => { loadConfig() }, [])
+
+  async function loadConfig() {
+    try {
+      const res = await fetch(`${API}/settings/ai`, {
+        headers: { 'Authorization': `Bearer ${token()}` }
+      })
+      const data = await res.json()
+      setConfig(data)
+    } catch { } finally { setLoading(false) }
+  }
+
+  async function saveKey() {
+    if (!keyInput.startsWith('csk-')) return setMsg({ type: 'error', text: 'Chave inválida — deve começar com csk-' })
+    setSaving(true); setMsg(null)
+    try {
+      const res = await fetch(`${API}/settings/ai`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token()}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cerebrasKey: keyInput })
+      })
+      if (res.ok) {
+        setMsg({ type: 'ok', text: 'Chave salva com sucesso!' })
+        setKeyInput('')
+        loadConfig()
+      } else {
+        const d = await res.json()
+        setMsg({ type: 'error', text: d.error })
+      }
+    } catch { setMsg({ type: 'error', text: 'Erro de rede' }) }
+    finally { setSaving(false) }
+  }
+
+  async function removeKey() {
+    if (!confirm('Remover a API key da Cerebras?')) return
+    await fetch(`${API}/settings/ai`, {
+      method: 'DELETE',
+      headers: { 'Authorization': `Bearer ${token()}` }
+    })
+    setMsg({ type: 'ok', text: 'Chave removida.' })
+    loadConfig()
+  }
+
+  const pct = config ? Math.min((config.tokensToday / config.tokenLimitDay) * 100, 100) : 0
+  const barColor = pct > 80 ? 'bg-red-500' : pct > 50 ? 'bg-amber-500' : 'bg-purple-500'
+
+  return (
+    <div className="bg-white dark:bg-gray-800 border border-gray-100 dark:border-gray-700 rounded-2xl p-6 shadow-sm">
+      <div className="flex items-center gap-2 mb-1">
+        <span className="text-lg">🧠</span>
+        <h2 className="font-semibold text-gray-800 dark:text-gray-100">Configuração de IA</h2>
+      </div>
+      <p className="text-sm text-gray-400 mb-5">
+        API key da Cerebras para o agente de QA automatizado. Crie a sua em{' '}
+        <a href="https://cloud.cerebras.ai" target="_blank" rel="noreferrer" className="text-purple-500 hover:underline">
+          cloud.cerebras.ai
+        </a>
+        {' '}— grátis, 1M tokens/dia.
+      </p>
+
+      {loading ? (
+        <div className="h-16 bg-gray-100 dark:bg-gray-700 rounded-xl animate-pulse" />
+      ) : (
+        <div className="space-y-4">
+          {/* API Key atual */}
+          {config?.hasKey && (
+            <div className="flex items-center justify-between bg-gray-50 dark:bg-gray-700/50 rounded-xl px-4 py-3">
+              <div>
+                <p className="text-xs text-gray-400 mb-0.5">Chave atual</p>
+                <p className="font-mono text-sm text-gray-700 dark:text-gray-200">{config.keyMasked}</p>
+              </div>
+              <button onClick={removeKey} className="text-xs text-red-400 hover:text-red-600 transition-colors">
+                Remover
+              </button>
+            </div>
+          )}
+
+          {/* Input nova key */}
+          <div className="flex gap-2">
+            <div className="relative flex-1">
+              <input
+                type={showKey ? 'text' : 'password'}
+                value={keyInput}
+                onChange={e => setKeyInput(e.target.value)}
+                placeholder="csk-xxxxxxxxxxxxxxxxxxxxxxxx"
+                className="w-full px-3 py-2 text-sm border border-gray-200 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 dark:text-white pr-10"
+              />
+              <button
+                type="button"
+                onClick={() => setShowKey(v => !v)}
+                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 text-xs"
+              >
+                {showKey ? '🙈' : '👁'}
+              </button>
+            </div>
+            <button
+              onClick={saveKey}
+              disabled={saving || !keyInput}
+              className="px-4 py-2 rounded-lg bg-purple-600 hover:bg-purple-700 text-white text-sm font-medium disabled:opacity-50 transition-colors whitespace-nowrap"
+            >
+              {saving ? 'Salvando...' : 'Salvar'}
+            </button>
+          </div>
+
+          {msg && (
+            <p className={`text-xs ${msg.type === 'ok' ? 'text-green-600' : 'text-red-500'}`}>{msg.text}</p>
+          )}
+
+          {/* Contador de tokens do dia */}
+          <div className="pt-2 border-t border-gray-100 dark:border-gray-700">
+            <div className="flex justify-between items-center mb-1.5">
+              <p className="text-xs font-medium text-gray-600 dark:text-gray-300">Uso de tokens hoje</p>
+              <p className="text-xs text-gray-400">
+                {(config?.tokensToday || 0).toLocaleString('pt-BR')} / {(config?.tokenLimitDay || 1000000).toLocaleString('pt-BR')}
+                <span className="ml-1 font-medium text-gray-600 dark:text-gray-300">({pct.toFixed(1)}%)</span>
+              </p>
+            </div>
+            <div className="w-full bg-gray-100 dark:bg-gray-700 rounded-full h-2">
+              <div
+                className={`h-2 rounded-full transition-all duration-500 ${barColor}`}
+                style={{ width: `${pct}%` }}
+              />
+            </div>
+            <p className="text-xs text-gray-400 mt-1">
+              {pct < 100
+                ? `~${Math.floor((config?.tokenLimitDay - config?.tokensToday) / 90000)} testes restantes hoje`
+                : '⚠️ Limite diário atingido — renova meia-noite (UTC)'}
+            </p>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ─── Página principal ──────────────────────────────────────────────────────────
 export default function Settings() {
   const [knowledge, setKnowledge] = useState([])
@@ -431,6 +575,9 @@ export default function Settings() {
         ) : (
           <KnowledgeSection items={projects} onSave={handleSave} onDelete={handleDelete} />
         )}
+
+        {/* Configuração de IA */}
+        <AIConfigSection />
 
         {/* Webhooks */}
         <WebhooksSection />

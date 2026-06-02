@@ -70,13 +70,14 @@ model ChatMessage {
 }
 
 model AIReport {
-  id        String   @id @default(cuid())
-  taskId    String   @unique
-  sessionId String?
-  status    String   @default("pending") // 'pending' | 'running' | 'done' | 'error'
-  report    String?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id         String   @id @default(cuid())
+  taskId     String   @unique
+  sessionId  String?
+  status     String   @default("pending") // 'pending' | 'running' | 'done' | 'error'
+  report     String?
+  tokensUsed Int?     // tokens consumidos nesta execução
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
 }
 
 model AIKnowledge {

@@ -71,9 +71,9 @@ function QAReview() {
       .catch(() => {})
   }, [task])
 
-  // Polling quando status é 'running'
+  // Polling enquanto está na fila ('queued') ou executando ('running')
   useEffect(() => {
-    if (aiReport?.status !== 'running') return
+    if (aiReport?.status !== 'running' && aiReport?.status !== 'queued') return
     const interval = setInterval(() => {
       fetch(`${API}/tasks/${id}/ai-report`, {
         headers: { 'Authorization': `Bearer ${token}` }
@@ -81,7 +81,7 @@ function QAReview() {
         .then(r => r.json())
         .then(data => {
           setAiReport(data)
-          if (data?.status !== 'running') clearInterval(interval)
+          if (data?.status !== 'running' && data?.status !== 'queued') clearInterval(interval)
         })
         .catch(() => {})
     }, 4000)
@@ -119,7 +119,7 @@ function QAReview() {
       })
       const data = await res.json()
       if (!res.ok) { alert(data.error); return }
-      setAiReport({ status: 'running' })
+      setAiReport({ status: 'queued' })
     } catch { alert('Erro ao iniciar análise') }
     finally { setAiLoading(false) }
   }
@@ -361,6 +361,9 @@ function QAReview() {
           <div className="flex items-center justify-between">
             <CardTitle className="text-base flex items-center gap-2">
               <span>🤖</span> Análise Automática de IA
+              {aiReport?.status === 'queued' && (
+                <span className="text-xs font-normal text-amber-500 animate-pulse">na fila...</span>
+              )}
               {aiReport?.status === 'running' && (
                 <span className="text-xs font-normal text-purple-500 animate-pulse">analisando...</span>
               )}
@@ -380,24 +383,14 @@ function QAReview() {
                 {aiLoading ? 'Iniciando...' : '▶ Executar análise'}
               </button>
             )}
-            {aiReport?.status === 'running' && (
-              <div className="flex gap-2">
-                <button
-                  onClick={runAiQA}
-                  disabled={aiLoading}
-                  title="Reiniciar análise (começa do zero)"
-                  className="text-xs px-3 py-1.5 rounded-lg bg-gray-100 dark:bg-gray-700 hover:bg-purple-100 dark:hover:bg-purple-900/30 text-gray-500 hover:text-purple-600 dark:text-gray-400 transition-colors"
-                >
-                  {aiLoading ? 'Reiniciando...' : '↺ Reiniciar'}
-                </button>
-                <button
-                  onClick={clearAiReport}
-                  title="Limpar análise travada"
-                  className="text-xs px-3 py-1.5 rounded-lg bg-gray-100 dark:bg-gray-700 hover:bg-red-100 dark:hover:bg-red-900/30 text-gray-500 hover:text-red-500 dark:text-gray-400 transition-colors"
-                >
-                  ✕ Limpar
-                </button>
-              </div>
+            {(aiReport?.status === 'running' || aiReport?.status === 'queued') && (
+              <button
+                onClick={clearAiReport}
+                title="Cancelar / limpar análise"
+                className="text-xs px-3 py-1.5 rounded-lg bg-gray-100 dark:bg-gray-700 hover:bg-red-100 dark:hover:bg-red-900/30 text-gray-500 hover:text-red-500 dark:text-gray-400 transition-colors"
+              >
+                ✕ Cancelar
+              </button>
             )}
             {aiReport?.status === 'done' && (
               <button
@@ -417,6 +410,18 @@ function QAReview() {
           {!aiReport && (task?.previewUrl || task?.testUrl) && (
             <p className="text-sm text-gray-400">Clique em "Executar análise" para o agente de IA testar o sistema automaticamente.</p>
           )}
+          {aiReport?.status === 'queued' && (
+            <div className="flex items-center gap-3 py-2">
+              <div className="flex gap-1">
+                {[0,1,2].map(i => (
+                  <div key={i} className="w-2 h-2 rounded-full bg-amber-500 animate-bounce" style={{ animationDelay: `${i*0.15}s` }} />
+                ))}
+              </div>
+              <p className="text-sm text-gray-500 dark:text-gray-400">
+                Análise na fila. <strong>Abra o QA Agent no seu computador</strong> para executá-la — o Chromium vai abrir aí.
+              </p>
+            </div>
+          )}
           {aiReport?.status === 'running' && (
             <div className="flex items-center gap-3 py-2">
               <div className="flex gap-1">
@@ -424,7 +429,7 @@ function QAReview() {
                   <div key={i} className="w-2 h-2 rounded-full bg-purple-500 animate-bounce" style={{ animationDelay: `${i*0.15}s` }} />
                 ))}
               </div>
-              <p className="text-sm text-gray-500 dark:text-gray-400">O agente está navegando e testando o sistema... pode levar até 2 minutos.</p>
+              <p className="text-sm text-gray-500 dark:text-gray-400">O agente está navegando e testando o sistema em tempo real no seu computador...</p>
             </div>
           )}
           {aiReport?.status === 'done' && aiReport.report && (

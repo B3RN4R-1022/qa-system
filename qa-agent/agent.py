@@ -1,4 +1,5 @@
 import os
+import copy
 import asyncio
 import logging
 from browser_use.agent.service import Agent
@@ -6,6 +7,38 @@ from browser_use.browser.profile import BrowserProfile
 from browser_use.browser.session import BrowserSession
 from browser_use.llm.messages import SystemMessage as BUSystemMessage, UserMessage as BUUserMessage, AssistantMessage as BUAssistantMessage
 from langchain_core.messages import SystemMessage as LCSystemMessage, HumanMessage, AIMessage
+
+# Campos de JSON Schema não suportados por alguns providers (Cerebras, etc.)
+_SCHEMA_UNSUPPORTED = frozenset({'min_items', 'max_items', 'uniqueItems', 'exclusiveMinimum', 'exclusiveMaximum'})
+
+def _clean_schema(obj):
+    """Remove campos de JSON Schema não suportados por alguns providers."""
+    if isinstance(obj, dict):
+        return {k: _clean_schema(v) for k, v in obj.items() if k not in _SCHEMA_UNSUPPORTED}
+    elif isinstance(obj, list):
+        return [_clean_schema(item) for item in obj]
+    return obj
+
+
+async def _invoke_clean_function_calling(llm, output_format, messages):
+    """
+    Usa function_calling com schema limpo (sem min_items etc.).
+    Retorna (response_bruto, parsed_model) para permitir tracking de tokens.
+    """
+    from langchain_core.utils.function_calling import convert_to_openai_tool
+
+    raw_tool = convert_to_openai_tool(output_format)
+    clean_tool = _clean_schema(copy.deepcopy(raw_tool))
+    tool_name = raw_tool.get('function', {}).get('name', 'output')
+
+    llm_bound = llm.bind_tools([clean_tool], tool_choice=tool_name)
+    response = await llm_bound.ainvoke(messages)
+
+    if hasattr(response, 'tool_calls') and response.tool_calls:
+        args = response.tool_calls[0].get('args', {})
+        return response, output_format.model_validate(args)
+
+    raise ValueError(f"Cerebras não retornou tool_call. Conteúdo: {str(getattr(response, 'content', ''))[:200]}")
 
 
 def convert_messages(messages):
@@ -66,47 +99,101 @@ class BrowserUseLLM:
     3. Retorna _CompletionWrapper com .completion
     """
 
-    def __init__(self, llm, provider_override=None):
+    def __init__(self, llm, provider_override=None, fallback_llm=None):
         self._llm = llm
+        self._fallback_llm = fallback_llm
+        self._using_fallback = False
         self.provider = provider_override or getattr(llm, 'provider', 'local')
         self.model = getattr(llm, 'model', getattr(llm, 'model_name', 'unknown'))
+        # Contadores de tokens
+        self._step = 0
+        self._tokens_in  = 0
+        self._tokens_out = 0
+        self._tokens_total = 0
 
     @property
     def model_name(self):
         return self.model
 
-    async def ainvoke(self, messages, output_format=None, **kwargs):
-        # Remove kwargs que LangChain não entende
-        kwargs.pop('session_id', None)
+    def _track_usage(self, response):
+        """Extrai e acumula uso de tokens da resposta LangChain."""
+        inp = out = total = 0
+        # usage_metadata (LangChain >= 0.2)
+        um = getattr(response, 'usage_metadata', None)
+        if um:
+            inp   = getattr(um, 'input_tokens',  0) or um.get('input_tokens',  0) if isinstance(um, dict) else getattr(um, 'input_tokens',  0)
+            out   = getattr(um, 'output_tokens', 0) or um.get('output_tokens', 0) if isinstance(um, dict) else getattr(um, 'output_tokens', 0)
+            total = getattr(um, 'total_tokens',  0) or um.get('total_tokens',  0) if isinstance(um, dict) else getattr(um, 'total_tokens',  0)
+        else:
+            # response_metadata (providers OpenAI-compat)
+            rm = getattr(response, 'response_metadata', {}) or {}
+            tu = rm.get('token_usage') or rm.get('usage') or {}
+            inp   = tu.get('prompt_tokens',     tu.get('input_tokens',  0))
+            out   = tu.get('completion_tokens', tu.get('output_tokens', 0))
+            total = tu.get('total_tokens', inp + out)
 
-        print(f"[BrowserUseLLM] ainvoke chamado | output_format={output_format is not None} | msgs={len(messages)}")
+        if total == 0 and (inp or out):
+            total = inp + out
+
+        self._tokens_in    += inp
+        self._tokens_out   += out
+        self._tokens_total += total
+        self._step         += 1
+
+        limit_day = 1_000_000  # Cerebras free tier
+        pct = (self._tokens_total / limit_day * 100) if limit_day else 0
+
+        print(
+            f"[Tokens] Step {self._step:>2} | "
+            f"step: {total:>6} (in:{inp} out:{out}) | "
+            f"total: {self._tokens_total:>7} | "
+            f"limite diário: {pct:.1f}% usado"
+        )
+
+    async def ainvoke(self, messages, output_format=None, **kwargs):
+        kwargs.pop('session_id', None)
+        print(f"[BrowserUseLLM] ainvoke | output_format={output_format is not None} | msgs={len(messages)}")
 
         if output_format is not None:
             lc_msgs = convert_messages(messages)
 
-            # Cerebras não suporta min_items/max_items no JSON Schema (function_calling)
-            # → usa json_mode que passa o schema como instrução no prompt
-            use_json_mode = self.provider in ('cerebras',)
+            async def _invoke_structured(llm):
+                if self.provider == 'cerebras':
+                    # Cerebras: function_calling com schema limpo + captura usage da resposta bruta
+                    raw, parsed = await _invoke_clean_function_calling(llm, output_format, lc_msgs)
+                    self._track_usage(raw)
+                    return parsed
+                # Outros providers: function_calling padrão com include_raw para capturar usage
+                structured = llm.with_structured_output(output_format, include_raw=True)
+                raw_result = await structured.ainvoke(lc_msgs)
+                self._track_usage(raw_result.get('raw'))
+                return raw_result['parsed']
 
             try:
-                method = "json_mode" if use_json_mode else "function_calling"
-                structured = self._llm.with_structured_output(output_format, method=method)
-                result = await structured.ainvoke(lc_msgs)
-                print(f"[BrowserUseLLM] structured OK ({method}) → type={type(result).__name__}")
+                result = await _invoke_structured(self._llm)
+                print(f"[BrowserUseLLM] structured OK → type={type(result).__name__}")
                 return _CompletionWrapper(completion=result)
+
             except Exception as e:
                 err_str = str(e)
-                # Fallback automático: se rejeitou o schema, tenta json_mode
-                if not use_json_mode and ('min_items' in err_str or 'wrong_api_format' in err_str):
-                    print(f"[BrowserUseLLM] Schema rejeitado, tentando json_mode como fallback...")
-                    try:
-                        structured = self._llm.with_structured_output(output_format, method="json_mode")
-                        result = await structured.ainvoke(lc_msgs)
-                        print(f"[BrowserUseLLM] json_mode fallback OK → type={type(result).__name__}")
-                        return _CompletionWrapper(completion=result)
-                    except Exception as e2:
-                        print(f"[BrowserUseLLM] json_mode FALHOU → {type(e2).__name__}: {e2}")
-                        raise e2
+                is_rate_limit = '429' in err_str or 'queue_exceeded' in err_str or 'too_many_requests' in err_str
+
+                # 429 → troca para modelo fallback automaticamente
+                if is_rate_limit and self._fallback_llm and not self._using_fallback:
+                    print(f"[BrowserUseLLM] 429 → trocando para modelo fallback")
+                    self._llm = self._fallback_llm
+                    self._using_fallback = True
+                    self.model = getattr(self._fallback_llm, 'model', 'fallback')
+                    result = await _invoke_structured(self._llm)
+                    print(f"[BrowserUseLLM] fallback OK → type={type(result).__name__}")
+                    return _CompletionWrapper(completion=result)
+
+                # Schema incompatível em outro provider → fallback para schema limpo
+                if 'min_items' in err_str or 'wrong_api_format' in err_str:
+                    print(f"[BrowserUseLLM] Schema rejeitado → tentando function_calling com schema limpo")
+                    result = await _invoke_clean_function_calling(self._llm, output_format, lc_msgs)
+                    return _CompletionWrapper(completion=result)
+
                 print(f"[BrowserUseLLM] structured FALHOU → {type(e).__name__}: {e}")
                 raise
         else:
@@ -129,7 +216,7 @@ class BrowserUseLLM:
             object.__setattr__(self, name, value)
 
 
-def build_llm():
+def build_llm(cerebras_api_key: str = None):
     """
     Cria o LLM conforme AI_PROVIDER no .env:
       - cerebras  → llama-3.3-70b grátis, 1M tokens/dia (~6 testes completos)
@@ -141,18 +228,27 @@ def build_llm():
 
     if provider == "cerebras":
         from langchain_openai import ChatOpenAI
-        api_key = os.getenv("CEREBRAS_API_KEY")
+        # Prioridade: key passada pelo usuário via Settings > .env
+        api_key = cerebras_api_key or os.getenv("CEREBRAS_API_KEY")
         if not api_key:
-            raise ValueError("CEREBRAS_API_KEY não configurada no .env do qa-agent")
+            raise ValueError("CEREBRAS_API_KEY não configurada. Adicione nas Configurações do QA System ou no .env do qa-agent")
         model = os.getenv("CEREBRAS_MODEL", "zai-glm-4.7")
-        print(f"[QA Agent] 🧠 Usando Cerebras — modelo: {model} (GRÁTIS)")
+        # Modelo de fallback: se o primário der 429, troca automaticamente
+        fallback_model = "zai-glm-4.7" if model != "zai-glm-4.7" else "gpt-oss-120b"
+        print(f"[QA Agent] 🧠 Usando Cerebras — modelo: {model} | fallback: {fallback_model} (GRÁTIS)")
         base_llm = ChatOpenAI(
             model=model,
             api_key=api_key,
             base_url="https://api.cerebras.ai/v1",
             temperature=0.1,
         )
-        return BrowserUseLLM(base_llm, provider_override="cerebras"), model
+        fallback_llm = ChatOpenAI(
+            model=fallback_model,
+            api_key=api_key,
+            base_url="https://api.cerebras.ai/v1",
+            temperature=0.1,
+        )
+        return BrowserUseLLM(base_llm, provider_override="cerebras", fallback_llm=fallback_llm), model
 
     elif provider == "deepseek":
         from langchain_openai import ChatOpenAI
@@ -271,11 +367,11 @@ async def run_qa_agent(
     description: str = "",
     headless: bool = False,
     max_steps: int = None,
+    cerebras_api_key: str = None,
 ) -> dict:
-    # max_steps: env var MAX_STEPS define o padrão (default 15)
     if max_steps is None:
         max_steps = int(os.getenv("MAX_STEPS", "15"))
-    llm, model_name = build_llm()
+    llm, model_name = build_llm(cerebras_api_key=cerebras_api_key)
 
     profile = BrowserProfile(headless=headless)
     session = BrowserSession(browser_profile=profile)
@@ -318,17 +414,32 @@ async def run_qa_agent(
         task=task_text,
         llm=llm,
         browser_session=session,
-        use_vision=False,       # DOM-based — lê estrutura da página sem visão
-        flash_mode=True,        # schema reduzido (só memory+action) — melhor compatibilidade
-        use_thinking=False,     # remove campo thinking do schema
+        use_vision=False,         # DOM-based — lê estrutura da página sem visão
+        flash_mode=True,          # schema reduzido (só memory+action) — melhor compatibilidade
+        use_thinking=False,       # remove campo thinking do schema
         max_actions_per_step=3,
+        max_failures=1,           # para imediatamente no primeiro erro (sem retry infinito)
         available_file_paths=image_paths,
         initial_actions=initial_actions,
     )
 
+    def log_token_summary():
+        print(
+            f"\n[Tokens] ══════════════════════════════\n"
+            f"[Tokens] 📊 RESUMO FINAL\n"
+            f"[Tokens]    Steps executados : {llm._step}\n"
+            f"[Tokens]    Tokens entrada   : {llm._tokens_in:,}\n"
+            f"[Tokens]    Tokens saída     : {llm._tokens_out:,}\n"
+            f"[Tokens]    TOTAL            : {llm._tokens_total:,}\n"
+            f"[Tokens]    Limite diário    : {llm._tokens_total / 1_000_000 * 100:.2f}% de 1.000.000\n"
+            f"[Tokens] ══════════════════════════════\n"
+        )
+
     try:
         print(f"[QA Agent] 🔢 Max steps: {max_steps}")
         history = await agent.run(max_steps=max_steps)
+
+        log_token_summary()
 
         final = None
         if hasattr(history, 'final_result') and callable(history.final_result):
@@ -342,13 +453,16 @@ async def run_qa_agent(
             "success": True,
             "report": final,
             "steps": len(history.history) if hasattr(history, 'history') else 0,
+            "tokens_total": llm._tokens_total,
         }
 
     except Exception as e:
+        log_token_summary()
         return {
             "success": False,
             "report": f"Erro durante execução do agente: {str(e)}",
             "steps": 0,
+            "tokens_total": llm._tokens_total,
         }
     finally:
         try:

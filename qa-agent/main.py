@@ -32,8 +32,9 @@ class RunQARequest(BaseModel):
     description: str = ""   # Requisitos/Descrição da Funcionalidade da task
     knowledge: str = ""
     skills: str = ""
-    headless: bool = False  # False = mostra o Chromium na tela
-    max_steps: int = None   # None = usa MAX_STEPS do .env (padrão 15)
+    headless: bool = False          # False = mostra o Chromium na tela
+    max_steps: int = None           # None = usa MAX_STEPS do .env (padrão 15)
+    cerebras_api_key: str = None    # key do usuário (prioridade sobre .env)
 
 
 @app.get("/")
@@ -70,6 +71,7 @@ async def run_in_background(task_id: str, request: RunQARequest):
         skills=request.skills,
         headless=request.headless,
         max_steps=request.max_steps,
+        cerebras_api_key=request.cerebras_api_key,
     )
 
     status = "done" if result["success"] else "error"

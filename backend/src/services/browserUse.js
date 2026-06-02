@@ -23,14 +23,15 @@ async function runBrowserUseAgent(taskId) {
   if (!task) throw new Error('Task não encontrada')
   if (!task.previewUrl) throw new Error('Task não tem URL de preview')
 
-  // Busca base de conhecimento e skills em paralelo
-  const [knowledge, skills] = await Promise.all([
+  // Busca base de conhecimento, skills e API key em paralelo
+  const [knowledge, skills, apiKeyRecord] = await Promise.all([
     task.projectName
       ? prisma.aIKnowledge.findUnique({
           where: { type_name: { type: 'project', name: task.projectName } }
         }).catch(() => null)
       : Promise.resolve(null),
-    prisma.aIKnowledge.findMany({ where: { type: 'skill' } })
+    prisma.aIKnowledge.findMany({ where: { type: 'skill' } }),
+    prisma.aIKnowledge.findUnique({ where: { type_name: { type: 'config', name: 'cerebras_api_key' } } }).catch(() => null)
   ])
 
   const criteria = task.checks?.map(c => c.label) || []
@@ -69,10 +70,11 @@ async function runBrowserUseAgent(taskId) {
         preview_url: task.previewUrl,
         criteria,
         project_name: task.projectName || '',
-        description: task.description || '',   // Requisitos da task como contexto
+        description: task.description || '',
         knowledge: knowledgeText,
         skills: skillsText,
-        headless: false  // mostra o Chromium na tela
+        headless: false,
+        cerebras_api_key: apiKeyRecord?.content || null  // key do banco (prioridade sobre .env)
       })
     })
 
@@ -98,6 +100,7 @@ async function runBrowserUseAgent(taskId) {
             data: {
               status: pollData.status,
               report: pollData.report || 'Sem resultado',
+              tokensUsed: pollData.tokens_total || null,
             }
           })
           return saved

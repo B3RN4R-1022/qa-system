@@ -1,7 +1,6 @@
 const express = require('express')
 const router = express.Router({ mergeParams: true })
 const prisma = require('../lib/prisma')
-const { runBrowserUseAgent } = require('../services/browserUse')
 
 // GET /tasks/:id/ai-report — retorna o relatório atual
 router.get('/', async (req, res) => {
@@ -15,12 +14,12 @@ router.get('/', async (req, res) => {
   }
 })
 
-// POST /tasks/:id/run-ai-qa — dispara o agente (roda em background)
+// POST /tasks/:id/run-ai-qa — coloca a análise na fila (Pull model)
+// O qa-agent local busca o job via /qa-jobs/pending e executa na máquina do analista
 router.post('/', async (req, res) => {
   const taskId = req.params.id
   const { previewUrl: urlOverride } = req.body || {}
 
-  // Verifica se a task existe
   const task = await prisma.qATask.findUnique({
     where: { id: taskId },
     select: { id: true, previewUrl: true, title: true }
@@ -28,11 +27,9 @@ router.post('/', async (req, res) => {
 
   if (!task) return res.status(404).json({ error: 'Task não encontrada' })
 
-  // Usa URL enviada pelo frontend (testUrl) ou a previewUrl do banco
   const urlFinal = urlOverride || task.previewUrl
   if (!urlFinal) return res.status(400).json({ error: 'Task não tem URL de preview configurada' })
 
-  // Salva a URL correta no banco para o agente usar
   if (urlFinal !== task.previewUrl) {
     await prisma.qATask.update({
       where: { id: taskId },
@@ -40,12 +37,16 @@ router.post('/', async (req, res) => {
     })
   }
 
-  // Responde imediatamente e roda em background
-  res.json({ ok: true, message: 'Análise iniciada — pode levar até 2 minutos' })
+  // Coloca o job na fila — status 'queued'
+  await prisma.aIReport.upsert({
+    where: { taskId },
+    create: { taskId, status: 'queued' },
+    update: { status: 'queued', report: null, tokensUsed: null }
+  })
 
-  // Roda em background sem bloquear a resposta
-  runBrowserUseAgent(taskId).catch(err => {
-    console.error('[AIReport] Erro no background:', err.message)
+  res.json({
+    ok: true,
+    message: 'Análise na fila — abra o QA Agent no seu computador para executá-la.'
   })
 })
 

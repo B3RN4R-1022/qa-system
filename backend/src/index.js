@@ -12,6 +12,8 @@ const statsRouter = require('./routes/stats')
 const chatRouter = require('./routes/chat')
 const knowledgeRouter = require('./routes/knowledge')
 const aiqaRouter = require('./routes/aiqa')
+const settingsRouter = require('./routes/settings')
+const qaJobsRouter = require('./routes/qaJobs')
 const authMiddleware = require('./middleware/auth')
 
 const app = express()
@@ -33,6 +35,8 @@ app.use('/chat', authMiddleware, chatRouter)
 app.use('/knowledge', authMiddleware, knowledgeRouter)
 app.use('/tasks/:id/ai-report', authMiddleware, aiqaRouter)
 app.use('/tasks/:id/run-ai-qa', authMiddleware, aiqaRouter)
+app.use('/settings', authMiddleware, settingsRouter)
+app.use('/qa-jobs', authMiddleware, qaJobsRouter)
 
 app.get('/', (req, res) => {
   res.json({ status: 'ok', message: 'QA System rodando' })
