@@ -30,9 +30,13 @@ from agent import run_qa_agent
 
 load_dotenv()
 
-LOCAL_VERSION = "1.3.2"
+LOCAL_VERSION = "1.3.5"
 DEFAULT_BACKEND = os.getenv("BACKEND_URL", "https://qa-system-5vpf.onrender.com").rstrip("/")
-VERSION_URL = "https://raw.githubusercontent.com/B3RN4R-1022/qa-system/master/qa-agent/version.txt"
+RAW_BASE    = "https://raw.githubusercontent.com/B3RN4R-1022/qa-system/master/qa-agent"
+VERSION_URL = f"{RAW_BASE}/version.txt"
+
+# Arquivos que o auto-update baixa — só código fonte, sem venv/dependências
+UPDATE_FILES = ["worker.py", "agent.py", "session.py", "version.txt"]
 POLL_INTERVAL  = 5   # segundos entre polls de jobs
 CANCEL_INTERVAL = 5  # segundos entre polls de cancelamento
 
@@ -848,16 +852,57 @@ def _spin(idx, msg):
 # ─── Atualização ──────────────────────────────────────────────────────────────
 
 async def check_update(client):
+    """
+    Verifica se há nova versão e, se houver, pergunta ao usuário se quer atualizar.
+    Baixa APENAS os arquivos de código (.py + version.txt) — sem tocar no venv.
+    """
     try:
         r = await client.get(VERSION_URL, timeout=5)
         remote = r.text.strip()
-        if remote and remote != LOCAL_VERSION:
-            print()
-            print(f"  🔄 Nova versão disponível: {remote} (atual: {LOCAL_VERSION})")
-            print("     Rode o instalador novamente para atualizar.")
-            print()
+        if not remote or remote == LOCAL_VERSION:
+            return  # já está na versão mais recente
     except Exception:
-        pass
+        return  # falha silenciosa — sem internet ou GitHub fora
+
+    print()
+    print(f"  🔄 Nova versão disponível: {remote}  (atual: {LOCAL_VERSION})")
+    resp = input("  Atualizar agora? [s/n]: ").strip().lower()
+    if resp != 's':
+        print()
+        return
+
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    failed = []
+
+    print()
+    for fname in UPDATE_FILES:
+        url = f"{RAW_BASE}/{fname}"
+        try:
+            r = await client.get(url, timeout=30)
+            if r.status_code == 200:
+                dest = os.path.join(script_dir, fname)
+                with open(dest, 'wb') as f:
+                    f.write(r.content)
+                print(f"  ✅ {fname}")
+            else:
+                failed.append(fname)
+                print(f"  ❌ {fname}  (HTTP {r.status_code})")
+        except Exception as e:
+            failed.append(fname)
+            print(f"  ❌ {fname}  ({e})")
+
+    print()
+    if failed:
+        print(f"  ⚠️  {len(failed)} arquivo(s) não puderam ser baixados.")
+        print("     Rode o instalador manualmente se o problema persistir.")
+    else:
+        ok(f"Atualização concluída — versão {remote} instalada.")
+        print()
+        print("  ↩  Reiniciando o agente para aplicar as mudanças...")
+        print()
+        # Reinicia o próprio processo com os mesmos argumentos
+        os.execv(sys.executable, [sys.executable] + sys.argv)
+
 
 
 # ─── Conexão com o backend ────────────────────────────────────────────────────
