@@ -24,13 +24,15 @@ const TYPE_COLOR = {
   repo:        'bg-gray-50 dark:bg-gray-800 text-gray-600 dark:text-gray-400 border-gray-200 dark:border-gray-700',
 }
 
-function CacheCard({ project, onClearCache, onClearRepo, onRemap }) {
+function CacheCard({ project, onClearCache, onClearRepo, onRemap, onSetType }) {
   const [expanded, setExpanded] = useState(false)
   const [cacheContent, setCacheContent] = useState(null)
   const [loadingCache, setLoadingCache] = useState(false)
   const [clearing, setClearing] = useState(false)
   const [clearingRepo, setClearingRepo] = useState(false)
   const [remapping, setRemapping] = useState(false)
+  const [savingType, setSavingType] = useState(false)
+  const [editingType, setEditingType] = useState(false)
 
   async function loadCache() {
     if (cacheContent !== null) { setExpanded(e => !e); return }
@@ -62,6 +64,23 @@ function CacheCard({ project, onClearCache, onClearRepo, onRemap }) {
       alert('Erro ao limpar cache')
     } finally {
       setClearing(false)
+    }
+  }
+
+  async function saveType(type) {
+    setSavingType(true)
+    try {
+      await fetch(`${API}/projects/${encodeURIComponent(project.name)}/repo`, {
+        method: 'PUT',
+        headers: { Authorization: `Bearer ${token()}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ projectType: type })
+      })
+      onSetType(project.name, type)
+      setEditingType(false)
+    } catch {
+      alert('Erro ao salvar tipo do projeto')
+    } finally {
+      setSavingType(false)
     }
   }
 
@@ -175,6 +194,48 @@ function CacheCard({ project, onClearCache, onClearRepo, onRemap }) {
             📁 {project.repoPath}
             {project.repoAnalyzedAt && <span className="font-sans ml-1 not-italic">· analisado {relativeDate(project.repoAnalyzedAt)}</span>}
           </p>
+        )}
+      </div>
+
+      {/* Seletor de tipo de projeto */}
+      <div className="mb-3">
+        {(!project.projectType || editingType) ? (
+          <div className="rounded-xl bg-gray-50 dark:bg-gray-800/60 border border-gray-100 dark:border-gray-700 p-2.5">
+            <p className="text-[11px] font-medium text-gray-500 dark:text-gray-400 mb-1.5">
+              {project.projectType ? 'Alterar tipo do projeto:' : 'Definir tipo do projeto:'}
+            </p>
+            <div className="flex gap-1.5 flex-wrap">
+              {Object.entries(TYPE_LABEL).map(([value, label]) => (
+                <button
+                  key={value}
+                  onClick={() => saveType(value)}
+                  disabled={savingType}
+                  className={`px-2.5 py-1 rounded-lg text-[11px] font-medium border transition-all disabled:opacity-50 ${
+                    project.projectType === value
+                      ? (TYPE_COLOR[value] || TYPE_COLOR.repo)
+                      : 'border-gray-200 dark:border-gray-600 text-gray-600 dark:text-gray-400 hover:border-blue-400 dark:hover:border-blue-500'
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+              {project.projectType && (
+                <button
+                  onClick={() => setEditingType(false)}
+                  className="px-2 py-1 rounded-lg text-[11px] text-gray-400 hover:text-gray-600 dark:hover:text-gray-200"
+                >
+                  cancelar
+                </button>
+              )}
+            </div>
+          </div>
+        ) : (
+          <button
+            onClick={() => setEditingType(true)}
+            className="text-[11px] text-gray-400 hover:text-blue-500 dark:hover:text-blue-400 transition-colors underline"
+          >
+            Alterar tipo ({TYPE_LABEL[project.projectType]})
+          </button>
         )}
       </div>
 
@@ -294,6 +355,12 @@ export default function Projects() {
     ))
   }
 
+  function handleSetType(projectName, type) {
+    setProjects(prev => prev.map(p =>
+      p.name === projectName ? { ...p, projectType: type } : p
+    ))
+  }
+
   function handleClearRepo(projectName) {
     setProjects(prev => prev.map(p =>
       p.name === projectName
@@ -398,6 +465,7 @@ export default function Projects() {
                 onClearCache={handleClearCache}
                 onClearRepo={handleClearRepo}
                 onRemap={handleRemap}
+                onSetType={handleSetType}
               />
             ))}
           </div>

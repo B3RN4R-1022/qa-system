@@ -77,7 +77,7 @@ router.get('/', async (req, res) => {
         projectType: repo?.projectType || null,          // 'wix_velo'|'wix_headless'|'repo'
         hasCache: cacheMap.has(p.name),
         cacheUpdatedAt: cacheMap.get(p.name)?.updatedAt || null,
-        hasRepo: !!repo,
+        hasRepo: !!repo?.repoPath,
         repoPath: repo?.repoPath || null,
         repoAnalyzedAt: repo?.analyzedAt || null,
         repoFileCount: repo?.fileCount || null,
