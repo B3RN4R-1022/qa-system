@@ -101,6 +101,26 @@ router.get('/:id', async (req, res) => {
   }
 })
 
+// POST /dev-tests/:id/cancel — interrompe um teste preso em queued/running
+router.post('/:id/cancel', async (req, res) => {
+  try {
+    const test = await prisma.devTest.findUnique({ where: { id: req.params.id } })
+    if (!test) return res.status(404).json({ error: 'Teste não encontrado' })
+    if (req.user.role === 'dev' && test.userId !== req.user.id) {
+      return res.status(403).json({ error: 'Sem permissão' })
+    }
+    const updated = await prisma.devTest.update({
+      where: { id: req.params.id },
+      data: { status: 'error', report: 'Interrompido manualmente pelo analista.' },
+      include: { user: { select: { name: true, email: true } } }
+    })
+    res.json(updated)
+  } catch (err) {
+    console.error('[dev-tests POST /:id/cancel]', err.message)
+    res.status(500).json({ error: 'Erro ao cancelar teste' })
+  }
+})
+
 // POST /dev-tests/:id/rerun — re-enfileira um teste já concluído ou com erro
 router.post('/:id/rerun', async (req, res) => {
   try {

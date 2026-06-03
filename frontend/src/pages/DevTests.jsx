@@ -51,10 +51,11 @@ const FILTER_OPTIONS = [
   { value: 'error',   label: 'Com erro' },
 ]
 
-function TestCard({ test, onDelete, onRerun, isQA }) {
+function TestCard({ test, onDelete, onRerun, onCancel, isQA }) {
   const [expanded, setExpanded] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const [rerunning, setRerunning] = useState(false)
+  const [cancelling, setCancelling] = useState(false)
 
   const isActive = test.status === 'queued' || test.status === 'running'
   const isFinished = test.status === 'done' || test.status === 'error'
@@ -71,6 +72,20 @@ function TestCard({ test, onDelete, onRerun, isQA }) {
       })
       onDelete(test.id)
     } catch { setDeleting(false) }
+  }
+
+  async function handleCancel() {
+    if (!confirm('Parar este teste e marcar como erro?')) return
+    setCancelling(true)
+    try {
+      const res = await fetch(`${API}/dev-tests/${test.id}/cancel`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}` }
+      })
+      const data = await res.json()
+      if (res.ok) onCancel(data)
+    } catch {}
+    finally { setCancelling(false) }
   }
 
   async function handleRerun() {
@@ -171,6 +186,24 @@ function TestCard({ test, onDelete, onRerun, isQA }) {
                 {expanded ? 'Fechar' : 'Ver relatório'}
               </button>
             )}
+            {isActive && (
+              <button
+                onClick={handleCancel}
+                disabled={cancelling}
+                title="Parar teste preso e marcar como erro"
+                className="text-xs text-orange-500 hover:text-orange-700 dark:hover:text-orange-300 px-2 py-1 rounded-lg border border-orange-200 dark:border-orange-800 hover:bg-orange-50 dark:hover:bg-orange-900/10 disabled:opacity-50 transition-colors flex items-center gap-1"
+              >
+                {cancelling ? (
+                  <svg className="w-3 h-3 animate-spin" viewBox="0 0 24 24" fill="none"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
+                ) : (
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="w-3 h-3">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M9 10h6v4H9z" />
+                  </svg>
+                )}
+                {cancelling ? 'Parando...' : 'Parar'}
+              </button>
+            )}
             {isFinished && (
               <button
                 onClick={handleRerun}
@@ -250,6 +283,10 @@ export default function DevTests() {
   }
 
   function handleRerun(updatedTest) {
+    setTests(prev => prev.map(t => t.id === updatedTest.id ? updatedTest : t))
+  }
+
+  function handleCancel(updatedTest) {
     setTests(prev => prev.map(t => t.id === updatedTest.id ? updatedTest : t))
   }
 
@@ -345,6 +382,7 @@ export default function DevTests() {
               test={test}
               onDelete={handleDelete}
               onRerun={handleRerun}
+              onCancel={handleCancel}
               isQA={isQA || isAdmin}
             />
           ))}
