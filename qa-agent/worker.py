@@ -500,7 +500,7 @@ def format_site_map_for_agent(site_map: dict) -> str:
 # ─── Sumário QA do repositório via Cerebras ──────────────────────────────────
 
 CEREBRAS_URL = "https://api.cerebras.ai/v1/chat/completions"
-CEREBRAS_MODEL = "llama-3.3-70b"   # hardware nativo Cerebras — ~2600 tok/s
+CEREBRAS_MODEL = "llama3.3-70b"   # hardware nativo Cerebras — ~2600 tok/s
 
 
 async def _cerebras_call(cerebras_key: str, prompt: str, max_tokens: int = 2048) -> str | None:
@@ -524,7 +524,7 @@ async def _cerebras_call(cerebras_key: str, prompt: str, max_tokens: int = 2048)
                     CEREBRAS_URL,
                     headers={"Authorization": f"Bearer {cerebras_key}", "Content-Type": "application/json"},
                     json={
-                        "model": "llama-3.1-8b",
+                        "model": "llama3.1-8b",
                         "messages": [{"role": "user", "content": prompt}],
                         "temperature": 0.1,
                         "max_tokens": max_tokens,

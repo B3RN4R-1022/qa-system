@@ -234,9 +234,9 @@ def build_llm(cerebras_api_key: str = None):
             raise ValueError("CEREBRAS_API_KEY não configurada. Adicione nas Configurações do QA System ou no .env do qa-agent")
         # llama-3.3-70b é o modelo nativo Cerebras (~2600 tok/s no hardware dedicado)
         # zai-glm-4.7 e gpt-oss-120b NÃO rodam no hardware Cerebras → 10-20× mais lentos
-        model = os.getenv("CEREBRAS_MODEL", "llama-3.3-70b")
-        # Fallback: llama-3.1-8b é ainda mais rápido quando há 429 no principal
-        fallback_model = "llama-3.1-8b" if model != "llama-3.1-8b" else "llama-3.3-70b"
+        model = os.getenv("CEREBRAS_MODEL", "llama3.3-70b")
+        # Fallback: llama3.1-8b é ainda mais rápido quando há 429 no principal
+        fallback_model = "llama3.1-8b" if model != "llama3.1-8b" else "llama3.3-70b"
         print(f"[QA Agent] ⚡ Usando Cerebras — modelo: {model} | fallback: {fallback_model} (GRÁTIS ~2600 tok/s)")
         base_llm = ChatOpenAI(
             model=model,
