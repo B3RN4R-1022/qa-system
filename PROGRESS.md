@@ -125,7 +125,7 @@ sugerir alteração — acionando os botões nativos de aprovação do Asana.
 - `GET /qa-jobs/pending` — Pull model: worker busca próximo job **filtrado por userId** (isolamento por usuário). Retorna: `site_cache`, `repo_cache`, `project_type`, `has_sitemap`, `pending_remap`
 - `POST /qa-jobs/:id/claim` — worker reivindica job
 - `POST /qa-jobs/:id/result` — worker posta resultado; `siteCache+projectName` salva cache de UI
-- `GET /dev-tests`, `POST /dev-tests`, `GET /dev-tests/:id`, `DELETE /dev-tests/:id`
+- `GET /dev-tests`, `POST /dev-tests`, `GET /dev-tests/:id`, `DELETE /dev-tests/:id`, `POST /dev-tests/:id/rerun` (re-enfileira), `POST /dev-tests/:id/cancel` (para teste preso)
 - `GET /projects` — lista projetos com stats: testCount, hasCache, hasRepo, **hasRepoCache**, **repoCacheUpdatedAt**, projectType, hasSitemap/sitemapPageCount, repoFileCount
 - `GET|PUT|DELETE /projects/:name/repo` — config do repo/tipo (merge no PUT)
 - `GET|PUT|DELETE /projects/:name/repo-cache` — **resumo QA do repositório** (DELETE também limpa lastCommit para forçar re-análise)
@@ -186,10 +186,10 @@ Frontend polling /ai-report ou /dev-tests/:id a cada 4s → exibe relatório
 
 | Arquivo | Descrição |
 |---------|-----------|
-| `worker.py` | **v1.3.9.** Login terminal, spinner/timer, loop de jobs, watcher de cancelamento. Auto-update (baixa só .py ao iniciar, reinicia sozinho). `estimate_steps_for_test()` (Cerebras estima steps por teste). `summarize_repo_for_qa()` + `update_repo_cache_with_diff()` (Cerebras resume repo → repo_cache). `_ask_analyst_hint()` (analista dá dica quando agente trava, retry com contexto do progresso). Pergunta visibilidade do browser a cada execução. |
+| `worker.py` | **v1.4.3.** Login terminal, spinner/timer, loop de jobs, watcher de cancelamento. Auto-update (baixa só .py ao iniciar, reinicia sozinho). Menu de configurações ao iniciar (trocar usuário, trocar chave Cerebras). `estimate_steps_for_test()` (Cerebras estima steps por teste, teto 50). `summarize_repo_for_qa()` + `update_repo_cache_with_diff()`. **Checkpoints por critério:** `_run_single_criterion()`, `_compile_final_report()`, `_criterion_passed()`, `_extract_criterion_detail()`. `_ask_analyst_hint()` com retry só no critério que falhou. `load_dotenv` com caminho absoluto + `override=True`. |
 | `session.py` | Cross-platform: Windows=DPAPI, macOS=Keychain, Linux=chmod 600. |
-| `agent.py` | browser-use wrapper. `max_failures=3` (3 tentativas antes de parar). Prompt inclui orçamento de steps. Truncagem de `code_context` (40k) e `site_map` (30k) para não estourar limite de 100k chars do browser-use. |
-| `version.txt` | Versão atual (`1.3.9`). **LOCAL_VERSION em worker.py SEMPRE deve bater com este arquivo.** |
+| `agent.py` | browser-use wrapper. `max_failures=3`, `max_actions_per_step=5`. Prompt com PASSO 2/3 genérico (não mais hardcoded para cadastro). Orçamento de steps com referência a "5 ações/step". Truncagem de `code_context` (40k) e `site_map` (30k). Modelo `gpt-oss-120b` (3000 tok/s, free tier). |
+| `version.txt` | Versão atual (`1.4.3`). **LOCAL_VERSION em worker.py SEMPRE deve bater com este arquivo.** |
 | `install.ps1` | Windows: `irm .../install.ps1 \| iex`. Necessário só na primeira instalação. |
 | `install.sh` | macOS: `curl -fsSL .../install.sh \| bash`. |
 
@@ -268,6 +268,7 @@ Fluxo para projetos `repo` e `wix_headless`:
 - **Dashboard.jsx** — dev filtra por `assigneeEmail === user.email` (match exato), fallback por nome para tasks antigas
 - **Chat.jsx** — `qaFlow` persiste no localStorage enquanto queued/running; ao voltar, retoma polling; poll imediato ao montar
 - **Projects.jsx** — badges sitemapPageCount + repoFileCount/repoCache; botão remap só para wix_velo; "Limpar cache repo"
+- **DevTests.jsx** — botão **Re-executar** (violeta, só para done/error) + botão **Parar** (laranja, só para queued/running); atualiza card em tempo real
 - **AgentInstallButton.jsx** — dropdown instalação Windows/macOS
 
 ---
@@ -297,7 +298,11 @@ Fluxo para projetos `repo` e `wix_headless`:
 - **browser-use limite 100k chars no task:** build_task() trunca code_context (40k) e site_map (30k); hard cap 95k
 - **max_failures=3:** com 1 o agente parava no primeiro tropeço (elemento não encontrado etc)
 - **qaFlow é estado React local:** sem localStorage, navegar e voltar ao chat perdía o estado do teste em andamento
-- **Estimativa de steps:** Cerebras estima via prompt curto (max_tokens=8); fallback = 8 + 5×critérios, máx 35. LOCAL_VERSION e version.txt devem sempre coincidir para evitar loop de auto-update
+- **Estimativa de steps:** Cerebras estima via prompt curto (max_tokens=16); fallback = 10 + 5×critérios, máx 50
+- **load_dotenv sem override:** variáveis do sistema Windows/sessão anterior podem prevalecer sobre .env → usar `load_dotenv(path_absoluto, override=True)`
+- **Modelos Cerebras free tier:** `llama3.1-8b` e `llama3.3-70b` retornam 404 no plano free. Usar `gpt-oss-120b` (3000 tok/s) ou `zai-glm-4.7` (fallback)
+- **PASSO 2/3 hardcoded:** o prompt original tinha instrução específica de "clique em cadastro/registro" — desperdiçava steps em testes não relacionados. Corrigido para instrução genérica baseada nos critérios
+- **Teste preso em "running":** worker morreu mas backend não sabe → botão "Parar" na página de testes reseta para error
 
 ---
 
@@ -332,11 +337,20 @@ Fluxo para projetos `repo` e `wix_headless`:
 - [x] Agente mais resiliente (max_failures 1→3) — FEITO
 - [x] Chat persiste qaFlow no localStorage — FEITO
 - [x] Analista pode dar dica ao agente quando trava (retry com contexto do progresso) — FEITO
+- [x] **Checkpoints por critério** — cada critério é sessão independente; falha em crit. N → só ele reabre — FEITO
+- [x] **Menu de configurações ao iniciar** — [1] trocar usuário, [2] trocar chave Cerebras — FEITO
+- [x] **Botão Re-executar** em DevTests — re-enfileira teste com os mesmos dados — FEITO
+- [x] **Botão Parar** para testes presos em running/queued — FEITO
+- [x] **max_actions_per_step 3→5** — agente agrupa mais ações por chamada LLM — FEITO
+- [x] **Budget de steps melhorado** — teto 35→50, mínimo por critério 20, fallback 10+5n máx 50 — FEITO
+- [x] **Prompt PASSO 2/3 genérico** — não mais hardcoded para cadastro — FEITO
+- [x] **load_dotenv caminho absoluto + override=True** — .env sempre prevalece sobre vars do sistema — FEITO
+- [x] **Modelo gpt-oss-120b** — único disponível no free tier Cerebras, 3000 tok/s — FEITO
 
 ### Backlog (aguardando autorização)
 - [ ] Botão "Mapear" da página Projetos virar job independente `wix_map` (hoje só seta pendingRemap)
-- [ ] Retry com dica: incluir contexto do progresso extraído do relatório anterior (parcialmente feito — função _extract_approved_from_report existe mas chamada ainda usa tuple antiga)
 - [ ] Testar fluxo completo end-to-end
 - [ ] Preencher base de conhecimento com projetos reais
 - [ ] Página de Conta (perfil do usuário, trocar senha)
 - [ ] Vision no agente (comparação visual)
+- [ ] Heartbeat do worker → auto-reset de testes presos após timeout (hoje: manual via botão Parar)
