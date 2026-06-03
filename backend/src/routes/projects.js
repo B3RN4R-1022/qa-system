@@ -5,7 +5,7 @@ const prisma = require('../lib/prisma')
 // GET /projects — lista todos os projetos conhecidos com stats de cache e repo
 router.get('/', async (req, res) => {
   try {
-    const [qaTasks, devTests, knowledgeProjects, caches, repoConfigs, sitemaps] = await Promise.all([
+    const [qaTasks, devTests, knowledgeProjects, caches, repoConfigs, sitemaps, repoCaches] = await Promise.all([
       prisma.qATask.findMany({
         select: { projectName: true, updatedAt: true },
         where: { projectName: { not: null } }
@@ -29,6 +29,10 @@ router.get('/', async (req, res) => {
       prisma.aIKnowledge.findMany({
         where: { type: 'wix_sitemap' },
         select: { name: true, content: true, updatedAt: true }
+      }),
+      prisma.aIKnowledge.findMany({
+        where: { type: 'repo_cache' },
+        select: { name: true, updatedAt: true }
       })
     ])
 
@@ -55,8 +59,9 @@ router.get('/', async (req, res) => {
       if (t.projectName) countMap.set(t.projectName, (countMap.get(t.projectName) || 0) + 1)
     })
 
-    const cacheMap   = new Map(caches.map(c => [c.name, c]))
-    const sitemapMap = new Map(sitemaps.map(s => {
+    const cacheMap     = new Map(caches.map(c => [c.name, c]))
+    const repoCacheMap = new Map(repoCaches.map(c => [c.name, c]))
+    const sitemapMap   = new Map(sitemaps.map(s => {
       let parsed = {}
       try { parsed = JSON.parse(s.content) } catch {}
       return [s.name, { pageCount: parsed.pageCount || 0, updatedAt: s.updatedAt }]
@@ -82,6 +87,8 @@ router.get('/', async (req, res) => {
         repoAnalyzedAt: repo?.analyzedAt || null,
         repoFileCount: repo?.fileCount || null,
         repoLastCommit: repo?.lastCommit || null,
+        hasRepoCache: repoCacheMap.has(p.name),
+        repoCacheUpdatedAt: repoCacheMap.get(p.name)?.updatedAt || null,
         hasSitemap: sitemapMap.has(p.name),
         sitemapPageCount: sitemap?.pageCount || null,
         sitemapUpdatedAt: sitemap?.updatedAt || null,
@@ -215,6 +222,60 @@ router.delete('/:name/cache', async (req, res) => {
     res.json({ ok: true })
   } catch (err) {
     res.status(500).json({ error: 'Erro ao remover cache' })
+  }
+})
+
+// GET /projects/:name/repo-cache — busca o resumo QA do repositório
+router.get('/:name/repo-cache', async (req, res) => {
+  try {
+    const record = await prisma.aIKnowledge.findUnique({
+      where: { type_name: { type: 'repo_cache', name: req.params.name } }
+    })
+    res.json(record || null)
+  } catch (err) {
+    res.status(500).json({ error: 'Erro ao buscar cache do repositório' })
+  }
+})
+
+// PUT /projects/:name/repo-cache — salva o resumo QA do repositório (chamado pelo worker)
+router.put('/:name/repo-cache', async (req, res) => {
+  try {
+    const content = typeof req.body.content === 'string' ? req.body.content : JSON.stringify(req.body)
+    await prisma.aIKnowledge.upsert({
+      where: { type_name: { type: 'repo_cache', name: req.params.name } },
+      create: { type: 'repo_cache', name: req.params.name, content },
+      update: { content }
+    })
+    res.json({ ok: true })
+  } catch (err) {
+    res.status(500).json({ error: 'Erro ao salvar cache do repositório' })
+  }
+})
+
+// DELETE /projects/:name/repo-cache — remove o resumo (força re-análise completa)
+router.delete('/:name/repo-cache', async (req, res) => {
+  try {
+    await prisma.aIKnowledge.deleteMany({
+      where: { type: 'repo_cache', name: req.params.name }
+    })
+    // Também limpa o lastCommit para forçar re-leitura completa
+    const existing = await prisma.aIKnowledge.findUnique({
+      where: { type_name: { type: 'project_repo', name: req.params.name } }
+    })
+    if (existing?.content) {
+      let current = {}
+      try { current = JSON.parse(existing.content) } catch {}
+      delete current.lastCommit
+      delete current.analyzedAt
+      delete current.fileCount
+      await prisma.aIKnowledge.update({
+        where: { type_name: { type: 'project_repo', name: req.params.name } },
+        data: { content: JSON.stringify(current) }
+      })
+    }
+    res.json({ ok: true })
+  } catch (err) {
+    res.status(500).json({ error: 'Erro ao remover cache do repositório' })
   }
 })
 

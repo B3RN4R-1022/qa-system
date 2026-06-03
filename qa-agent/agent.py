@@ -329,14 +329,15 @@ quais botões estão disponíveis e como é a navegação. Use este mapa para ir
 {_map}
 """
 
-    # Seção de código-fonte — dá ao agente entendimento do que foi implementado
+    # Seção de resumo QA do repositório — gerado pela Cerebras, não código bruto
     code_section = ""
     if _code:
-        code_section = f"""## CÓDIGO-FONTE DO PROJETO (use para entender o que foi implementado)
-Este é o código real do projeto. Use-o para:
-- Entender exatamente o que a feature faz e como foi implementada
-- Saber onde procurar no browser (rotas, componentes, fluxos)
-- Ter precisão nos testes sem precisar explorar o site do zero
+        code_section = f"""## ANÁLISE DO REPOSITÓRIO — resumo QA (use para guiar os testes)
+Este resumo foi gerado automaticamente a partir do código-fonte. Use-o para:
+- Saber quais rotas e funcionalidades existem (sem precisar explorar do zero)
+- Entender o fluxo de autenticação e os formulários disponíveis
+- Conhecer as regras de negócio que devem ser validadas nos testes
+- Identificar endpoints de API relevantes
 
 {_code}
 """

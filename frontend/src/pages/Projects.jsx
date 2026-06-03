@@ -24,12 +24,13 @@ const TYPE_COLOR = {
   repo:        'bg-gray-50 dark:bg-gray-800 text-gray-600 dark:text-gray-400 border-gray-200 dark:border-gray-700',
 }
 
-function CacheCard({ project, onClearCache, onClearRepo, onRemap, onSetType }) {
+function CacheCard({ project, onClearCache, onClearRepo, onClearRepoCache, onRemap, onSetType }) {
   const [expanded, setExpanded] = useState(false)
   const [cacheContent, setCacheContent] = useState(null)
   const [loadingCache, setLoadingCache] = useState(false)
   const [clearing, setClearing] = useState(false)
   const [clearingRepo, setClearingRepo] = useState(false)
+  const [clearingRepoCache, setClearingRepoCache] = useState(false)
   const [remapping, setRemapping] = useState(false)
   const [savingType, setSavingType] = useState(false)
   const [editingType, setEditingType] = useState(false)
@@ -123,6 +124,22 @@ function CacheCard({ project, onClearCache, onClearRepo, onRemap, onSetType }) {
     }
   }
 
+  async function clearRepoCache() {
+    if (!confirm(`Limpar cache QA do repositório "${project.name}"?\nO worker vai re-analisar o código completo no próximo teste.`)) return
+    setClearingRepoCache(true)
+    try {
+      await fetch(`${API}/projects/${encodeURIComponent(project.name)}/repo-cache`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token()}` }
+      })
+      onClearRepoCache(project.name)
+    } catch {
+      alert('Erro ao limpar cache do repositório')
+    } finally {
+      setClearingRepoCache(false)
+    }
+  }
+
   let parsed = null
   if (cacheContent) {
     try { parsed = JSON.parse(cacheContent) } catch { parsed = null }
@@ -177,10 +194,14 @@ function CacheCard({ project, onClearCache, onClearRepo, onRemap, onSetType }) {
               {project.sitemapPageCount ? `${project.sitemapPageCount} págs.` : 'Mapeado'}
             </span>
           ) : null}
-          {project.hasRepo ? (
+          {project.hasRepoCache ? (
             <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-400 text-[10px] font-medium border border-blue-200 dark:border-blue-800">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="w-2.5 h-2.5"><path strokeLinecap="round" strokeLinejoin="round" d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" /></svg>
-              {project.repoFileCount ? `${project.repoFileCount} arq.` : 'Repo'}
+              {project.repoFileCount ? `${project.repoFileCount} arq.` : 'Repo analisado'}
+            </span>
+          ) : project.hasRepo ? (
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-gray-50 dark:bg-gray-800 text-gray-400 text-[10px] font-medium border border-gray-200 dark:border-gray-700">
+              Repo (aguardando análise)
             </span>
           ) : null}
         </div>
@@ -201,6 +222,11 @@ function CacheCard({ project, onClearCache, onClearRepo, onRemap, onSetType }) {
           <p className="text-[11px] text-gray-400 font-mono truncate" title={project.repoPath}>
             📁 {project.repoPath}
             {project.repoAnalyzedAt && <span className="font-sans ml-1 not-italic">· analisado {relativeDate(project.repoAnalyzedAt)}{project.repoFileCount ? ` (${project.repoFileCount} arq.)` : ''}</span>}
+          </p>
+        )}
+        {project.hasRepoCache && project.repoCacheUpdatedAt && (
+          <p className="text-[11px] text-gray-400">
+            🧠 Cache QA do repo atualizado {relativeDate(project.repoCacheUpdatedAt)}
           </p>
         )}
       </div>
@@ -262,24 +288,39 @@ function CacheCard({ project, onClearCache, onClearRepo, onRemap, onSetType }) {
             </button>
           </>
         )}
-        {(project.hasCache || project.hasRepo) && <span className="text-gray-200 dark:text-gray-700 text-xs">·</span>}
-        <button
-          onClick={requestRemap}
-          disabled={remapping}
-          title={project.hasSitemap ? 'Re-mapear site' : 'Mapear site'}
-          className={`p-1 rounded-lg transition-colors disabled:opacity-50 ${
-            remapping
-              ? 'text-blue-400 animate-pulse'
-              : 'text-gray-400 hover:text-blue-500 dark:hover:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/20'
-          }`}
-        >
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} className="w-4 h-4">
-            <path strokeLinecap="round" strokeLinejoin="round" d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7" />
-          </svg>
-        </button>
+        {/* Botão de remap — só para Wix Velo */}
+        {(!project.projectType || project.projectType === 'wix_velo') && (
+          <>
+            {project.hasCache && <span className="text-gray-200 dark:text-gray-700 text-xs">·</span>}
+            <button
+              onClick={requestRemap}
+              disabled={remapping}
+              title={project.hasSitemap ? 'Re-mapear site' : 'Mapear site'}
+              className={`p-1 rounded-lg transition-colors disabled:opacity-50 ${
+                remapping
+                  ? 'text-blue-400 animate-pulse'
+                  : 'text-gray-400 hover:text-blue-500 dark:hover:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/20'
+              }`}
+            >
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} className="w-4 h-4">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7" />
+              </svg>
+            </button>
+          </>
+        )}
+        {/* Ações de repo — só para projetos com repo */}
+        {project.hasRepoCache && (
+          <>
+            <span className="text-gray-200 dark:text-gray-700 text-xs">·</span>
+            <button onClick={clearRepoCache} disabled={clearingRepoCache}
+              className="text-xs text-red-400 hover:text-red-600 dark:hover:text-red-300 transition-colors underline">
+              {clearingRepoCache ? 'Limpando...' : 'Limpar cache repo'}
+            </button>
+          </>
+        )}
         {project.hasRepo && (
           <>
-            {(project.hasCache || project.hasSitemap) && <span className="text-gray-200 dark:text-gray-700 text-xs">·</span>}
+            <span className="text-gray-200 dark:text-gray-700 text-xs">·</span>
             <button onClick={clearRepo} disabled={clearingRepo}
               className="text-xs text-red-400 hover:text-red-600 dark:hover:text-red-300 transition-colors underline">
               {clearingRepo ? 'Removendo...' : 'Remover repo'}
@@ -387,6 +428,14 @@ export default function Projects() {
     ))
   }
 
+  function handleClearRepoCache(projectName) {
+    setProjects(prev => prev.map(p =>
+      p.name === projectName
+        ? { ...p, hasRepoCache: false, repoCacheUpdatedAt: null, repoAnalyzedAt: null, repoFileCount: null }
+        : p
+    ))
+  }
+
   const filtered = projects.filter(p =>
     p.name.toLowerCase().includes(search.toLowerCase())
   )
@@ -482,6 +531,7 @@ export default function Projects() {
                 project={project}
                 onClearCache={handleClearCache}
                 onClearRepo={handleClearRepo}
+                onClearRepoCache={handleClearRepoCache}
                 onRemap={handleRemap}
                 onSetType={handleSetType}
               />

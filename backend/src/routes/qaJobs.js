@@ -50,7 +50,7 @@ router.get('/pending', async (req, res) => {
         return res.json(null)
       }
 
-      const [knowledge, skills, siteCache, projectRepo, wixSitemap] = await Promise.all([
+      const [knowledge, skills, siteCache, projectRepo, wixSitemap, repoCache] = await Promise.all([
         task.projectName
           ? prisma.aIKnowledge.findUnique({ where: { type_name: { type: 'project', name: task.projectName } } }).catch(() => null)
           : Promise.resolve(null),
@@ -63,6 +63,9 @@ router.get('/pending', async (req, res) => {
           : Promise.resolve(null),
         task.projectName
           ? prisma.aIKnowledge.findUnique({ where: { type_name: { type: 'wix_sitemap', name: task.projectName } } }).catch(() => null)
+          : Promise.resolve(null),
+        task.projectName
+          ? prisma.aIKnowledge.findUnique({ where: { type_name: { type: 'repo_cache', name: task.projectName } } }).catch(() => null)
           : Promise.resolve(null),
       ])
 
@@ -82,6 +85,7 @@ router.get('/pending', async (req, res) => {
         knowledge: knowledgeText,
         skills: skillsText,
         site_cache: siteCache?.content || null,
+        repo_cache: repoCache?.content || null,
         project_type: repoConfig.projectType || null,
         has_sitemap: !!wixSitemap?.content,
         pending_remap: repoConfig.pendingRemap || false,
@@ -91,7 +95,7 @@ router.get('/pending', async (req, res) => {
       // dev_test
       const criteria = winner.criteria ? JSON.parse(winner.criteria) : []
 
-      const [knowledge, skills, siteCache, projectRepo, wixSitemap] = await Promise.all([
+      const [knowledge, skills, siteCache, projectRepo, wixSitemap, repoCache] = await Promise.all([
         winner.projectName
           ? prisma.aIKnowledge.findUnique({ where: { type_name: { type: 'project', name: winner.projectName } } }).catch(() => null)
           : Promise.resolve(null),
@@ -104,6 +108,9 @@ router.get('/pending', async (req, res) => {
           : Promise.resolve(null),
         winner.projectName
           ? prisma.aIKnowledge.findUnique({ where: { type_name: { type: 'wix_sitemap', name: winner.projectName } } }).catch(() => null)
+          : Promise.resolve(null),
+        winner.projectName
+          ? prisma.aIKnowledge.findUnique({ where: { type_name: { type: 'repo_cache', name: winner.projectName } } }).catch(() => null)
           : Promise.resolve(null),
       ])
 
@@ -122,6 +129,7 @@ router.get('/pending', async (req, res) => {
         knowledge: knowledgeText,
         skills: skillsText,
         site_cache: siteCache?.content || null,
+        repo_cache: repoCache?.content || null,
         project_type: repoConfig.projectType || null,
         has_sitemap: !!wixSitemap?.content,
         pending_remap: repoConfig.pendingRemap || false,

@@ -30,7 +30,7 @@ from agent import run_qa_agent
 
 load_dotenv()
 
-LOCAL_VERSION = "1.3.0"
+LOCAL_VERSION = "1.3.2"
 DEFAULT_BACKEND = os.getenv("BACKEND_URL", "https://qa-system-5vpf.onrender.com").rstrip("/")
 VERSION_URL = "https://raw.githubusercontent.com/B3RN4R-1022/qa-system/master/qa-agent/version.txt"
 POLL_INTERVAL  = 5   # segundos entre polls de jobs
@@ -493,6 +493,100 @@ def format_site_map_for_agent(site_map: dict) -> str:
     return '\n'.join(lines)
 
 
+# ─── Sumário QA do repositório via Cerebras ──────────────────────────────────
+
+CEREBRAS_URL = "https://api.cerebras.ai/v1/chat/completions"
+CEREBRAS_MODEL = "gpt-oss-120b"
+
+
+async def _cerebras_call(cerebras_key: str, prompt: str, max_tokens: int = 2048) -> str | None:
+    """Chama Cerebras diretamente (sem browser-use) para tarefas de análise."""
+    async with httpx.AsyncClient(timeout=120) as c:
+        try:
+            r = await c.post(
+                CEREBRAS_URL,
+                headers={"Authorization": f"Bearer {cerebras_key}", "Content-Type": "application/json"},
+                json={
+                    "model": CEREBRAS_MODEL,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "temperature": 0.1,
+                    "max_tokens": max_tokens,
+                }
+            )
+            data = r.json()
+            if r.status_code == 429:
+                # fallback model
+                r2 = await c.post(
+                    CEREBRAS_URL,
+                    headers={"Authorization": f"Bearer {cerebras_key}", "Content-Type": "application/json"},
+                    json={
+                        "model": "zai-glm-4.7",
+                        "messages": [{"role": "user", "content": prompt}],
+                        "temperature": 0.1,
+                        "max_tokens": max_tokens,
+                    }
+                )
+                data = r2.json()
+            return data.get("choices", [{}])[0].get("message", {}).get("content", "").strip() or None
+        except Exception as e:
+            err(f"Erro na chamada Cerebras: {e}")
+            return None
+
+
+async def summarize_repo_for_qa(raw_code: str, project_name: str, cerebras_key: str) -> str | None:
+    """
+    Usa Cerebras para extrair apenas o essencial do repositório para QA.
+    Retorna um JSON com rotas, features, auth, endpoints, regras de negócio.
+    Esse resumo é salvo em cache — NÃO o código bruto.
+    """
+    prompt = f"""Você é um assistente de QA analisando o repositório '{project_name}'.
+
+Leia o código abaixo e extraia APENAS o que é relevante para um analista de QA realizar testes manuais.
+
+Responda com um JSON válido (sem markdown, sem explicações) com esta estrutura:
+{{
+  "projectType": "tipo do projeto (ex: React SPA com API Node, Next.js e-commerce)",
+  "mainRoutes": ["lista das rotas/páginas principais encontradas"],
+  "keyFeatures": ["funcionalidades principais que podem ser testadas"],
+  "authFlow": "como funciona o login/autenticação: campos necessários, endpoint, fluxo completo",
+  "apiEndpoints": ["endpoints de API relevantes para testes (método + caminho)"],
+  "forms": ["formulários encontrados com seus campos principais"],
+  "businessRules": ["regras de negócio importantes para validação durante testes"],
+  "knownIssues": ["TODOs, FIXMEs ou código comentado que pode causar problemas"],
+  "techStack": "tecnologias principais (brevemente)",
+  "testingNotes": "dicas específicas para o analista de QA sobre este projeto"
+}}
+
+Código do repositório '{project_name}':
+{raw_code[:38000]}"""
+
+    info("🤖 Cerebras analisando repositório — extraindo dados essenciais para QA...")
+    result = await _cerebras_call(cerebras_key, prompt, max_tokens=2048)
+    return result
+
+
+async def update_repo_cache_with_diff(
+    existing_cache: str, diff_context: str,
+    project_name: str, cerebras_key: str
+) -> str | None:
+    """
+    Atualiza o cache QA do repositório com base no git diff mais recente.
+    Mantém tudo que não mudou e atualiza apenas o que o diff alterou.
+    """
+    prompt = f"""Este é o cache QA atual do projeto '{project_name}':
+{existing_cache}
+
+Abaixo estão as mudanças recentes no código (git diff):
+{diff_context[:18000]}
+
+Atualize o JSON com base nas mudanças. Mantenha todos os campos que não foram afetados.
+Responda APENAS com o JSON atualizado, sem markdown ou explicações."""
+
+    info("🤖 Cerebras atualizando cache com as mudanças do repositório...")
+    result = await _cerebras_call(cerebras_key, prompt, max_tokens=2048)
+    return result
+
+
 # ─── Repo: buscar / salvar no backend ────────────────────────────────────────
 
 async def _get_repo_meta(client, backend_url, headers, project_name):
@@ -516,6 +610,29 @@ async def _save_repo_meta(client, backend_url, headers, project_name, data: dict
         )
     except Exception:
         pass
+
+
+async def _get_repo_cache(client, backend_url, headers, project_name):
+    """Busca o resumo QA do repositório salvo no backend."""
+    try:
+        r = await client.get(f"{backend_url}/projects/{project_name}/repo-cache", headers=headers, timeout=8)
+        data = r.json() if r.status_code == 200 else None
+        return data.get('content') if data else None
+    except Exception:
+        return None
+
+
+async def _save_repo_cache(client, backend_url, headers, project_name, content: str):
+    """Salva o resumo QA do repositório no backend."""
+    try:
+        await client.put(
+            f"{backend_url}/projects/{project_name}/repo-cache",
+            headers={**headers, 'Content-Type': 'application/json'},
+            json={"content": content},
+            timeout=15
+        )
+    except Exception as e:
+        err(f"Erro ao salvar cache do repositório: {e}")
 
 
 async def _get_wix_sitemap(client, backend_url, headers, project_name):
@@ -884,44 +1001,62 @@ async def run_job(client, backend_url, headers, job, cerebras_key):
             site_map_context = format_site_map_for_agent(wix_map)
 
     # ── Análise de repositório (Wix Headless ou Repo) ─────────────────────
-    code_context = None
-    new_head     = None
+    # O worker lê o código completo mas passa ao agente apenas um RESUMO QA
+    # gerado pela Cerebras — não o código bruto. O resumo é salvo em cache
+    # e reutilizado (só o diff atualiza o cache nas próximas execuções).
+    repo_cache_context = job.get('repo_cache')  # cache já salvo, se houver
+    new_head = None
 
-    if project_name and project_type in ('wix_headless', 'repo', None):
+    if project_name and project_type in ('wix_headless', 'repo'):
         repo_path = await ensure_repo_path(client, backend_url, headers, project_name)
 
-        if repo_path:  # noqa: E111
+        if repo_path:
             repo_meta   = await _get_repo_meta(client, backend_url, headers, project_name)
             last_commit = repo_meta.get('lastCommit') if repo_meta else None
 
-            if not last_commit:
-                # Primeira análise — lê tudo
-                info("🔍 Primeira análise do repositório — lendo código completo...")
+            if not last_commit or not repo_cache_context:
+                # Primeira análise — lê tudo e resume via Cerebras
+                info("🔍 Primeira análise — lendo repositório completo...")
                 print()
-                code_context, new_head, repo_err = analyze_repo_full(repo_path)
+                raw_code, new_head, repo_err = analyze_repo_full(repo_path)
                 if repo_err:
                     err(f"Repositório: {repo_err}")
-                elif code_context:
-                    # Conta arquivos para salvar nos metadados
-                    file_count = code_context.count('\n#### ')
-                    await _save_repo_meta(client, backend_url, headers, project_name, {
-                        'lastCommit': new_head,
-                        'analyzedAt': datetime.now(timezone.utc).isoformat(),
-                        'fileCount':  file_count,
-                    })
-                    ok(f"Análise completa salva — {file_count} arquivos.")
+                elif raw_code:
+                    file_count = raw_code.count('\n#### ')
+                    print()
+                    summary = await summarize_repo_for_qa(raw_code, project_name, cerebras_key)
+                    if summary:
+                        await _save_repo_cache(client, backend_url, headers, project_name, summary)
+                        await _save_repo_meta(client, backend_url, headers, project_name, {
+                            'lastCommit': new_head,
+                            'analyzedAt': datetime.now(timezone.utc).isoformat(),
+                            'fileCount':  file_count,
+                        })
+                        repo_cache_context = summary
+                        ok(f"Cache QA criado — {file_count} arquivos resumidos para o agente.")
+                    else:
+                        err("Não foi possível gerar o resumo. Teste prossegue sem contexto de código.")
             else:
-                # Análises subsequentes — só o diff
+                # Análises subsequentes — só o diff atualiza o cache
                 info("📊 Verificando mudanças de código desde a última análise...")
-                code_context, new_head, no_changes = analyze_repo_diff(repo_path, last_commit)
+                diff_context, new_head, no_changes = analyze_repo_diff(repo_path, last_commit)
                 if no_changes:
-                    info("Sem mudanças de código desde o último teste.")
-                elif code_context:
-                    info("Mudanças encontradas — diff incluído no contexto.")
-                    await _save_repo_meta(client, backend_url, headers, project_name, {
-                        'lastCommit': new_head,
-                        'analyzedAt': datetime.now(timezone.utc).isoformat(),
-                    })
+                    info("Sem mudanças de código — usando cache QA existente.")
+                elif diff_context:
+                    print()
+                    updated = await update_repo_cache_with_diff(
+                        repo_cache_context, diff_context, project_name, cerebras_key
+                    )
+                    if updated:
+                        await _save_repo_cache(client, backend_url, headers, project_name, updated)
+                        await _save_repo_meta(client, backend_url, headers, project_name, {
+                            'lastCommit': new_head,
+                            'analyzedAt': datetime.now(timezone.utc).isoformat(),
+                        })
+                        repo_cache_context = updated
+                        ok("Cache QA atualizado com as mudanças.")
+                    else:
+                        info("Erro ao atualizar cache — usando versão anterior.")
         print()
 
     info("Abrindo Chromium — aguarde...")
@@ -939,7 +1074,7 @@ async def run_job(client, backend_url, headers, job, cerebras_key):
         headless=False,
         cerebras_api_key=cerebras_key,
         site_cache=site_cache,
-        code_context=code_context,
+        code_context=repo_cache_context,   # resumo QA, não código bruto
         site_map=site_map_context,
     ))
     timer_task  = asyncio.create_task(_live_timer(job["title"]))
