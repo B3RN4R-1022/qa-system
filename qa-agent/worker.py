@@ -18,6 +18,9 @@ import sys
 import time
 import asyncio
 import getpass
+import fnmatch
+import subprocess
+from datetime import datetime, timezone
 
 import httpx
 from dotenv import load_dotenv
@@ -34,6 +37,295 @@ POLL_INTERVAL  = 5   # segundos entre polls de jobs
 CANCEL_INTERVAL = 5  # segundos entre polls de cancelamento
 
 SPINNER = ['|', '/', '-', '\\']
+
+# Extensões de código-fonte que o worker lê
+CODE_EXTENSIONS = frozenset({
+    '.js', '.jsx', '.ts', '.tsx',
+    '.py', '.prisma',
+    '.vue', '.svelte',
+    '.css', '.scss', '.sass',
+    '.html',
+    '.sh', '.bash',
+})
+
+# Diretórios que NUNCA são lidos (além do .gitignore)
+ALWAYS_SKIP_DIRS = frozenset({
+    'node_modules', 'venv', '.venv', 'env', '.env',
+    '__pycache__', '.git', '.svn', '.hg',
+    'dist', 'build', '.next', 'out', 'output',
+    'coverage', '.coverage',
+    '.cache', 'tmp', 'temp',
+    'vendor', 'bower_components',
+    '.idea', '.vscode', '.vs',
+    'migrations',
+    'static', 'media', 'uploads',
+})
+
+# Arquivos que NUNCA são lidos
+ALWAYS_SKIP_FILES = frozenset({
+    'package-lock.json', 'yarn.lock', 'pnpm-lock.yaml',
+    'poetry.lock', 'Pipfile.lock', 'composer.lock',
+    '.DS_Store', 'Thumbs.db',
+})
+
+
+# ─── Análise de Repositório ───────────────────────────────────────────────────
+
+def _parse_gitignore(repo_path):
+    """Lê .gitignore e retorna lista de padrões extras para ignorar."""
+    patterns = []
+    path = os.path.join(repo_path, '.gitignore')
+    if not os.path.exists(path):
+        return patterns
+    try:
+        with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith('#') and not line.startswith('!'):
+                    patterns.append(line.rstrip('/'))
+    except Exception:
+        pass
+    return patterns
+
+
+def _is_ignored(rel_path, gitignore_patterns):
+    """Verifica se um caminho deve ser ignorado."""
+    name = os.path.basename(rel_path)
+
+    # .env nunca é lido, independente de qualquer coisa
+    if name.startswith('.env') or name == '.env':
+        return True
+    if name in ALWAYS_SKIP_FILES:
+        return True
+
+    parts = rel_path.replace('\\', '/').split('/')
+
+    # Diretórios sempre ignorados (em qualquer nível da árvore)
+    for part in parts[:-1]:
+        if part in ALWAYS_SKIP_DIRS:
+            return True
+
+    # Padrões do .gitignore
+    rel_unix = rel_path.replace('\\', '/')
+    for pattern in gitignore_patterns:
+        pat = pattern.strip('/')
+        for part in parts:
+            if fnmatch.fnmatch(part, pat):
+                return True
+        if fnmatch.fnmatch(rel_unix, pat) or fnmatch.fnmatch(name, pat):
+            return True
+
+    return False
+
+
+def _run_git(args, cwd, timeout=15):
+    """Executa um comando git e retorna stdout ou None se falhar."""
+    try:
+        r = subprocess.run(
+            ['git'] + args,
+            capture_output=True, text=True,
+            cwd=cwd, timeout=timeout
+        )
+        return r.stdout.strip() if r.returncode == 0 else None
+    except Exception:
+        return None
+
+
+def _get_head(repo_path):
+    return _run_git(['rev-parse', 'HEAD'], repo_path, timeout=5)
+
+
+def analyze_repo_full(repo_path):
+    """
+    PRIMEIRA análise: lê a estrutura completa do repositório.
+    Sem limite de arquivos ou linhas — só respeita .gitignore e padrões fixos.
+    Retorna: (contexto: str, head_commit: str | None, erro: str | None)
+    """
+    if not os.path.exists(os.path.join(repo_path, '.git')):
+        return None, None, f"Não é um repositório git: {repo_path}"
+
+    ignore_patterns = _parse_gitignore(repo_path)
+    lines = []
+
+    # Histórico de commits
+    log = _run_git(['log', '--format=%h %s (%ar)', '-20'], repo_path)
+    if log:
+        lines.append("### Histórico de commits recentes:")
+        lines.append(log)
+
+    # Branch atual
+    branch = _run_git(['branch', '--show-current'], repo_path)
+    if branch:
+        lines.append(f"\n### Branch atual: {branch}")
+
+    # Coleta todos os arquivos de código (respeitando .gitignore)
+    all_files = []
+    try:
+        for root, dirs, files in os.walk(repo_path):
+            # Remove dirs ignorados in-place (evita descer neles)
+            dirs[:] = sorted([
+                d for d in dirs
+                if d not in ALWAYS_SKIP_DIRS
+            ])
+            rel_root = os.path.relpath(root, repo_path)
+            rel_root = '' if rel_root == '.' else rel_root
+
+            for fname in sorted(files):
+                rel = os.path.join(rel_root, fname) if rel_root else fname
+                rel = rel.replace('\\', '/')
+                ext = os.path.splitext(fname)[1].lower()
+
+                if ext not in CODE_EXTENSIONS:
+                    continue
+                if _is_ignored(rel, ignore_patterns):
+                    continue
+
+                all_files.append(rel)
+    except Exception as e:
+        return None, None, f"Erro ao percorrer repositório: {e}"
+
+    if not all_files:
+        return None, None, "Nenhum arquivo de código encontrado (verifique o caminho e o .gitignore)."
+
+    lines.append(f"\n### Estrutura do projeto ({len(all_files)} arquivos de código):")
+    for p in all_files:
+        lines.append(f"  {p}")
+
+    # Lê o conteúdo completo de cada arquivo
+    lines.append("\n### Conteúdo dos arquivos de código:")
+    files_read = 0
+    for rel_path in all_files:
+        full_path = os.path.join(repo_path, rel_path.replace('/', os.sep))
+        try:
+            with open(full_path, 'r', encoding='utf-8', errors='ignore') as f:
+                content = f.read()
+
+            ext = os.path.splitext(rel_path)[1].lstrip('.')
+            num_lines = content.count('\n') + 1
+            lines.append(f"\n#### {rel_path} ({num_lines} linhas)")
+            lines.append(f"```{ext}")
+            lines.append(content.rstrip())
+            lines.append("```")
+            files_read += 1
+        except Exception:
+            pass
+
+    head = _get_head(repo_path)
+    context = '\n'.join(lines)
+    print(f"\n  [Repo] {files_read} arquivos lidos | ~{len(context):,} caracteres")
+    return context, head, None
+
+
+def analyze_repo_diff(repo_path, last_commit):
+    """
+    ANÁLISES SUBSEQUENTES: lê apenas o diff desde o último commit analisado.
+    Retorna: (contexto: str | None, head_commit: str | None, sem_mudancas: bool)
+    """
+    if not os.path.exists(os.path.join(repo_path, '.git')):
+        return None, None, False
+
+    head = _get_head(repo_path)
+    if not head:
+        return None, None, False
+
+    if head == last_commit:
+        return None, head, True  # nada mudou
+
+    ignore_patterns = _parse_gitignore(repo_path)
+    lines = []
+
+    # Commits novos desde a última análise
+    log = _run_git(['log', '--format=%h %s (%ar)', f'{last_commit}..HEAD'], repo_path)
+    if log:
+        lines.append("### Commits desde a última análise:")
+        lines.append(log)
+
+    # Diff completo (com conteúdo das mudanças)
+    diff_raw = _run_git(['diff', f'{last_commit}..HEAD'], repo_path, timeout=30)
+    if diff_raw:
+        lines.append("\n### Diff completo das mudanças:")
+        lines.append("```diff")
+
+        # Filtra seções de arquivos ignorados do diff
+        keep = True
+        for line in diff_raw.split('\n'):
+            if line.startswith('diff --git'):
+                # Extrai o caminho: "diff --git a/foo b/foo"
+                parts = line.split(' b/')
+                file_path = parts[-1].strip() if len(parts) > 1 else ''
+                keep = not _is_ignored(file_path, ignore_patterns)
+            if keep:
+                lines.append(line)
+
+        lines.append("```")
+
+    if len(lines) <= 2:
+        return None, head, True  # só havia arquivos ignorados
+
+    return '\n'.join(lines), head, False
+
+
+# ─── Repo: buscar / salvar no backend ────────────────────────────────────────
+
+async def _get_repo_meta(client, backend_url, headers, project_name):
+    """Busca a config salva do repo para este projeto."""
+    try:
+        r = await client.get(
+            f"{backend_url}/projects/{project_name}/repo",
+            headers=headers, timeout=8
+        )
+        return r.json() if r.status_code == 200 else None
+    except Exception:
+        return None
+
+
+async def _save_repo_meta(client, backend_url, headers, project_name, data: dict):
+    """Salva/atualiza a config do repo no backend."""
+    try:
+        await client.put(
+            f"{backend_url}/projects/{project_name}/repo",
+            headers=headers, json=data, timeout=10
+        )
+    except Exception:
+        pass
+
+
+async def ensure_repo_path(client, backend_url, headers, project_name):
+    """
+    Retorna o caminho local do repositório para este projeto.
+    Se não houver salvo, pergunta no terminal e valida.
+    Retorna None se o usuário pular (Enter em branco).
+    """
+    meta = await _get_repo_meta(client, backend_url, headers, project_name)
+    if meta and meta.get('repoPath'):
+        path = meta['repoPath']
+        if os.path.exists(path) and os.path.exists(os.path.join(path, '.git')):
+            return path
+        # Caminho salvo não existe mais — pede novo
+        err(f"Caminho salvo não encontrado: {path}")
+
+    print()
+    info(f"Repositório local não configurado para o projeto '{project_name}'.")
+    info("Cole o caminho da pasta raiz do projeto (onde está o .git).")
+    info("Deixe em branco para pular a análise de código neste teste.")
+    print()
+    repo_path = input("  Caminho do repositório: ").strip().strip('"').strip("'")
+
+    if not repo_path:
+        return None
+
+    if not os.path.exists(repo_path):
+        err(f"Caminho não encontrado: {repo_path}")
+        return None
+
+    if not os.path.exists(os.path.join(repo_path, '.git')):
+        err(f"Não é um repositório git (falta a pasta .git): {repo_path}")
+        return None
+
+    # Salva no backend para não perguntar de novo
+    await _save_repo_meta(client, backend_url, headers, project_name, {'repoPath': repo_path})
+    ok(f"Caminho salvo para o projeto '{project_name}'.")
+    return repo_path
 
 
 # ─── Visual ───────────────────────────────────────────────────────────────────
@@ -261,6 +553,48 @@ async def run_job(client, backend_url, headers, job, cerebras_key):
     if criterios:
         info(f"Critérios: {len(criterios)} item(s)")
     print()
+
+    # ── Análise de repositório ────────────────────────────────────────────
+    code_context = None
+    new_head     = None
+
+    if project_name:
+        repo_path = await ensure_repo_path(client, backend_url, headers, project_name)
+
+        if repo_path:
+            repo_meta   = await _get_repo_meta(client, backend_url, headers, project_name)
+            last_commit = repo_meta.get('lastCommit') if repo_meta else None
+
+            if not last_commit:
+                # Primeira análise — lê tudo
+                info("🔍 Primeira análise do repositório — lendo código completo...")
+                print()
+                code_context, new_head, repo_err = analyze_repo_full(repo_path)
+                if repo_err:
+                    err(f"Repositório: {repo_err}")
+                elif code_context:
+                    # Conta arquivos para salvar nos metadados
+                    file_count = code_context.count('\n#### ')
+                    await _save_repo_meta(client, backend_url, headers, project_name, {
+                        'lastCommit': new_head,
+                        'analyzedAt': datetime.now(timezone.utc).isoformat(),
+                        'fileCount':  file_count,
+                    })
+                    ok(f"Análise completa salva — {file_count} arquivos.")
+            else:
+                # Análises subsequentes — só o diff
+                info("📊 Verificando mudanças de código desde a última análise...")
+                code_context, new_head, no_changes = analyze_repo_diff(repo_path, last_commit)
+                if no_changes:
+                    info("Sem mudanças de código desde o último teste.")
+                elif code_context:
+                    info("Mudanças encontradas — diff incluído no contexto.")
+                    await _save_repo_meta(client, backend_url, headers, project_name, {
+                        'lastCommit': new_head,
+                        'analyzedAt': datetime.now(timezone.utc).isoformat(),
+                    })
+        print()
+
     info("Abrindo Chromium — aguarde...")
     print()
 
@@ -276,6 +610,7 @@ async def run_job(client, backend_url, headers, job, cerebras_key):
         headless=False,
         cerebras_api_key=cerebras_key,
         site_cache=site_cache,
+        code_context=code_context,
     ))
     timer_task  = asyncio.create_task(_live_timer(job["title"]))
     cancel_task = asyncio.create_task(

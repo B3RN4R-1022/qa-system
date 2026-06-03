@@ -17,11 +17,12 @@ function relativeDate(dateStr) {
   return new Date(dateStr).toLocaleDateString('pt-BR')
 }
 
-function CacheCard({ project, onClearCache }) {
+function CacheCard({ project, onClearCache, onClearRepo }) {
   const [expanded, setExpanded] = useState(false)
   const [cacheContent, setCacheContent] = useState(null)
   const [loadingCache, setLoadingCache] = useState(false)
   const [clearing, setClearing] = useState(false)
+  const [clearingRepo, setClearingRepo] = useState(false)
 
   async function loadCache() {
     if (cacheContent !== null) { setExpanded(e => !e); return }
@@ -56,6 +57,22 @@ function CacheCard({ project, onClearCache }) {
     }
   }
 
+  async function clearRepo() {
+    if (!confirm(`Remover configuração de repositório do projeto "${project.name}"?\nO worker vai perguntar o caminho novamente no próximo teste.`)) return
+    setClearingRepo(true)
+    try {
+      await fetch(`${API}/projects/${encodeURIComponent(project.name)}/repo`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token()}` }
+      })
+      onClearRepo(project.name)
+    } catch {
+      alert('Erro ao remover repositório')
+    } finally {
+      setClearingRepo(false)
+    }
+  }
+
   let parsed = null
   if (cacheContent) {
     try { parsed = JSON.parse(cacheContent) } catch { parsed = null }
@@ -87,52 +104,65 @@ function CacheCard({ project, onClearCache }) {
           </div>
         </div>
 
-        {/* Badge de cache */}
-        <div className="shrink-0">
+        {/* Badges */}
+        <div className="shrink-0 flex flex-col gap-1 items-end">
           {project.hasCache ? (
-            <span className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-400 text-[11px] font-medium border border-emerald-200 dark:border-emerald-800">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="w-3 h-3">
-                <path strokeLinecap="round" strokeLinejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-              </svg>
-              Cache ativo
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-400 text-[10px] font-medium border border-emerald-200 dark:border-emerald-800">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="w-2.5 h-2.5"><path strokeLinecap="round" strokeLinejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+              Cache UI
             </span>
           ) : (
-            <span className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-gray-50 dark:bg-gray-800 text-gray-400 text-[11px] font-medium border border-gray-200 dark:border-gray-700">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="w-3 h-3">
-                <circle cx="12" cy="12" r="9" />
-                <path strokeLinecap="round" d="M12 8v4M12 16h.01" />
-              </svg>
-              Sem cache
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-gray-50 dark:bg-gray-800 text-gray-400 text-[10px] font-medium border border-gray-200 dark:border-gray-700">
+              Sem cache UI
+            </span>
+          )}
+          {project.hasRepo ? (
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-400 text-[10px] font-medium border border-blue-200 dark:border-blue-800">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="w-2.5 h-2.5"><path strokeLinecap="round" strokeLinejoin="round" d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" /></svg>
+              Repo: {project.repoFileCount ? `${project.repoFileCount} arq.` : 'configurado'}
+            </span>
+          ) : (
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-gray-50 dark:bg-gray-800 text-gray-400 text-[10px] font-medium border border-gray-200 dark:border-gray-700">
+              Sem repo
             </span>
           )}
         </div>
       </div>
 
-      {/* Cache atualizado em */}
-      {project.hasCache && project.cacheUpdatedAt && (
-        <p className="text-[11px] text-gray-400 mb-3">
-          Cache atualizado {relativeDate(project.cacheUpdatedAt)}
-        </p>
-      )}
+      {/* Datas e repo path */}
+      <div className="flex flex-col gap-0.5 mb-3">
+        {project.hasCache && project.cacheUpdatedAt && (
+          <p className="text-[11px] text-gray-400">Cache UI atualizado {relativeDate(project.cacheUpdatedAt)}</p>
+        )}
+        {project.hasRepo && project.repoPath && (
+          <p className="text-[11px] text-gray-400 font-mono truncate" title={project.repoPath}>
+            📁 {project.repoPath}
+            {project.repoAnalyzedAt && <span className="font-sans ml-1 not-italic">· analisado {relativeDate(project.repoAnalyzedAt)}</span>}
+          </p>
+        )}
+      </div>
 
       {/* Ações */}
       <div className="flex items-center gap-2 flex-wrap">
         {project.hasCache && (
           <>
-            <button
-              onClick={loadCache}
-              disabled={loadingCache}
-              className="text-xs text-indigo-600 dark:text-indigo-400 hover:text-indigo-800 dark:hover:text-indigo-200 transition-colors underline"
-            >
-              {loadingCache ? 'Carregando...' : expanded ? 'Ocultar cache' : 'Ver cache'}
+            <button onClick={loadCache} disabled={loadingCache}
+              className="text-xs text-indigo-600 dark:text-indigo-400 hover:text-indigo-800 dark:hover:text-indigo-200 transition-colors underline">
+              {loadingCache ? 'Carregando...' : expanded ? 'Ocultar cache UI' : 'Ver cache UI'}
             </button>
             <span className="text-gray-200 dark:text-gray-700 text-xs">·</span>
-            <button
-              onClick={clearCache}
-              disabled={clearing}
-              className="text-xs text-red-400 hover:text-red-600 dark:hover:text-red-300 transition-colors underline"
-            >
-              {clearing ? 'Limpando...' : 'Limpar cache'}
+            <button onClick={clearCache} disabled={clearing}
+              className="text-xs text-red-400 hover:text-red-600 dark:hover:text-red-300 transition-colors underline">
+              {clearing ? 'Limpando...' : 'Limpar cache UI'}
+            </button>
+          </>
+        )}
+        {project.hasRepo && (
+          <>
+            {project.hasCache && <span className="text-gray-200 dark:text-gray-700 text-xs">·</span>}
+            <button onClick={clearRepo} disabled={clearingRepo}
+              className="text-xs text-red-400 hover:text-red-600 dark:hover:text-red-300 transition-colors underline">
+              {clearingRepo ? 'Removendo...' : 'Remover repo'}
             </button>
           </>
         )}
@@ -213,8 +243,14 @@ export default function Projects() {
 
   function handleClearCache(projectName) {
     setProjects(prev => prev.map(p =>
+      p.name === projectName ? { ...p, hasCache: false, cacheUpdatedAt: null } : p
+    ))
+  }
+
+  function handleClearRepo(projectName) {
+    setProjects(prev => prev.map(p =>
       p.name === projectName
-        ? { ...p, hasCache: false, cacheUpdatedAt: null }
+        ? { ...p, hasRepo: false, repoPath: null, repoAnalyzedAt: null, repoFileCount: null, repoLastCommit: null }
         : p
     ))
   }
@@ -313,6 +349,7 @@ export default function Projects() {
                 key={project.name}
                 project={project}
                 onClearCache={handleClearCache}
+                onClearRepo={handleClearRepo}
               />
             ))}
           </div>

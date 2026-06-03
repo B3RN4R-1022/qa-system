@@ -292,7 +292,7 @@ def build_llm(cerebras_api_key: str = None):
         return BrowserUseLLM(base_llm, provider_override="groq"), model
 
 
-def build_task(title: str, preview_url: str, criteria: list, project_name: str, knowledge: str, skills: str, description: str = "", site_cache: str = None) -> str:
+def build_task(title: str, preview_url: str, criteria: list, project_name: str, knowledge: str, skills: str, description: str = "", site_cache: str = None, code_context: str = None) -> str:
     criteria_text = "\n".join(f"- {c}" for c in criteria) if criteria else "- Verificar funcionamento geral da funcionalidade"
 
     description_section = (
@@ -302,6 +302,18 @@ def build_task(title: str, preview_url: str, criteria: list, project_name: str, 
 
     skills_section = f"## Instruções gerais de QA\n{skills}" if skills else ""
     knowledge_section = f"## Base de conhecimento do projeto {project_name}\n{knowledge}" if knowledge else ""
+
+    # Seção de código-fonte — dá ao agente entendimento do que foi implementado
+    code_section = ""
+    if code_context:
+        code_section = f"""## CÓDIGO-FONTE DO PROJETO (use para entender o que foi implementado)
+Este é o código real do projeto. Use-o para:
+- Entender exatamente o que a feature faz e como foi implementada
+- Saber onde procurar no browser (rotas, componentes, fluxos)
+- Ter precisão nos testes sem precisar explorar o site do zero
+
+{code_context}
+"""
 
     # Seção de cache de site — se existir, a IA pula exploração já conhecida
     cache_section = ""
@@ -333,6 +345,8 @@ Projeto: {project_name or 'Não informado'}
 {skills_section}
 
 {knowledge_section}
+
+{code_section}
 
 {cache_section}
 
@@ -461,6 +475,7 @@ async def run_qa_agent(
     max_steps: int = None,
     cerebras_api_key: str = None,
     site_cache: str = None,
+    code_context: str = None,
 ) -> dict:
     import tempfile, shutil
 
@@ -476,7 +491,7 @@ async def run_qa_agent(
         browser_profile=BrowserProfile(headless=headless, user_data_dir=temp_profile_dir)
     )
 
-    task_text = build_task(title, preview_url, criteria, project_name, knowledge, skills, description, site_cache=site_cache)
+    task_text = build_task(title, preview_url, criteria, project_name, knowledge, skills, description, site_cache=site_cache, code_context=code_context)
 
     # Imagens disponíveis para o agente fazer upload quando necessário
     import glob as _glob

@@ -2,10 +2,10 @@ const express = require('express')
 const router = express.Router()
 const prisma = require('../lib/prisma')
 
-// GET /projects — lista todos os projetos conhecidos com stats de cache
+// GET /projects — lista todos os projetos conhecidos com stats de cache e repo
 router.get('/', async (req, res) => {
   try {
-    const [qaTasks, devTests, knowledgeProjects, caches] = await Promise.all([
+    const [qaTasks, devTests, knowledgeProjects, caches, repoConfigs] = await Promise.all([
       prisma.qATask.findMany({
         select: { projectName: true, updatedAt: true },
         where: { projectName: { not: null } }
@@ -20,6 +20,10 @@ router.get('/', async (req, res) => {
       }),
       prisma.aIKnowledge.findMany({
         where: { type: 'site_cache' },
+        select: { name: true, updatedAt: true }
+      }),
+      prisma.aIKnowledge.findMany({
+        where: { type: 'project_repo' },
         select: { name: true, content: true, updatedAt: true }
       })
     ])
@@ -48,14 +52,27 @@ router.get('/', async (req, res) => {
     })
 
     const cacheMap = new Map(caches.map(c => [c.name, c]))
-
-    const projects = Array.from(projectMap.values()).map(p => ({
-      name: p.name,
-      testCount: countMap.get(p.name) || 0,
-      lastActivity: p.lastActivity,
-      hasCache: cacheMap.has(p.name),
-      cacheUpdatedAt: cacheMap.get(p.name)?.updatedAt || null
+    const repoMap  = new Map(repoConfigs.map(r => {
+      let parsed = {}
+      try { parsed = JSON.parse(r.content) } catch {}
+      return [r.name, { ...parsed, updatedAt: r.updatedAt }]
     }))
+
+    const projects = Array.from(projectMap.values()).map(p => {
+      const repo = repoMap.get(p.name)
+      return {
+        name: p.name,
+        testCount: countMap.get(p.name) || 0,
+        lastActivity: p.lastActivity,
+        hasCache: cacheMap.has(p.name),
+        cacheUpdatedAt: cacheMap.get(p.name)?.updatedAt || null,
+        hasRepo: !!repo,
+        repoPath: repo?.repoPath || null,
+        repoAnalyzedAt: repo?.analyzedAt || null,
+        repoFileCount: repo?.fileCount || null,
+        repoLastCommit: repo?.lastCommit || null,
+      }
+    })
 
     projects.sort((a, b) => {
       if (!a.lastActivity && !b.lastActivity) return a.name.localeCompare(b.name)
@@ -68,6 +85,57 @@ router.get('/', async (req, res) => {
   } catch (err) {
     console.error('[Projects] Erro:', err)
     res.status(500).json({ error: 'Erro ao listar projetos' })
+  }
+})
+
+// GET /projects/:name/repo — retorna config do repositório local
+router.get('/:name/repo', async (req, res) => {
+  try {
+    const record = await prisma.aIKnowledge.findUnique({
+      where: { type_name: { type: 'project_repo', name: req.params.name } }
+    })
+    if (!record) return res.json(null)
+    try { res.json(JSON.parse(record.content)) }
+    catch { res.json({ raw: record.content }) }
+  } catch (err) {
+    res.status(500).json({ error: 'Erro ao buscar config do repo' })
+  }
+})
+
+// PUT /projects/:name/repo — salva/atualiza config do repositório
+// Body: { repoPath?, lastCommit?, analyzedAt?, fileCount? }
+router.put('/:name/repo', async (req, res) => {
+  try {
+    // Faz merge com dados existentes para não sobrescrever campos não enviados
+    const existing = await prisma.aIKnowledge.findUnique({
+      where: { type_name: { type: 'project_repo', name: req.params.name } }
+    })
+    let current = {}
+    if (existing?.content) {
+      try { current = JSON.parse(existing.content) } catch {}
+    }
+    const merged = { ...current, ...req.body }
+    await prisma.aIKnowledge.upsert({
+      where: { type_name: { type: 'project_repo', name: req.params.name } },
+      create: { type: 'project_repo', name: req.params.name, content: JSON.stringify(merged) },
+      update: { content: JSON.stringify(merged) }
+    })
+    res.json({ ok: true })
+  } catch (err) {
+    console.error('[Projects] Erro ao salvar repo:', err)
+    res.status(500).json({ error: 'Erro ao salvar config do repo' })
+  }
+})
+
+// DELETE /projects/:name/repo — remove config do repositório
+router.delete('/:name/repo', async (req, res) => {
+  try {
+    await prisma.aIKnowledge.deleteMany({
+      where: { type: 'project_repo', name: req.params.name }
+    })
+    res.json({ ok: true })
+  } catch (err) {
+    res.status(500).json({ error: 'Erro ao remover config do repo' })
   }
 })
 
