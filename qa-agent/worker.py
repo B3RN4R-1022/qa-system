@@ -30,7 +30,7 @@ from agent import run_qa_agent
 
 load_dotenv()
 
-LOCAL_VERSION = "1.3.5"
+LOCAL_VERSION = "1.3.7"
 DEFAULT_BACKEND = os.getenv("BACKEND_URL", "https://qa-system-5vpf.onrender.com").rstrip("/")
 RAW_BASE    = "https://raw.githubusercontent.com/B3RN4R-1022/qa-system/master/qa-agent"
 VERSION_URL = f"{RAW_BASE}/version.txt"
