@@ -721,53 +721,47 @@ async def _save_wix_sitemap(client, backend_url, headers, project_name, site_map
         err(f"Erro ao salvar mapa do site: {e}")
 
 
+def _ask_headless(prompt_text: str) -> bool:
+    """Pergunta ao usuário se quer ver o browser. Retorna True = headless (oculto)."""
+    resp = input(f"  {prompt_text} [s/n]: ").strip().lower()
+    return resp != 's'
+
+
 async def handle_wix_mapping(client, backend_url, headers, project_name, preview_url,
-                              has_sitemap: bool, pending_remap: bool, crawl_headless: bool):
+                              has_sitemap: bool, pending_remap: bool):
     """
     Gerencia o mapeamento Wix Velo.
     - Se há mapa e não foi pedido remap: retorna o mapa existente
     - Se não há mapa: pergunta se quer mapear agora
-    - Se pending_remap=True: remapeia automaticamente
-    Retorna: (site_map: dict | None, headless_preference: bool)
+    - Se pending_remap=True: remapeia (pergunta visibilidade)
+    Sempre pergunta se quer ver o browser ao mapear — não salva preferência.
+    Retorna: site_map: dict | None
     """
-    # Remap pedido via formulário — remapeia sem perguntar
-    if pending_remap:
-        info("🔄 Re-mapeamento solicitado pelo usuário.")
-        await _save_repo_meta(client, backend_url, headers, project_name, {'pendingRemap': False})
-        site_map, count, e = await crawl_wix_site(preview_url, headless=crawl_headless)
-        if e:
-            err(f"Erro no mapeamento: {e}")
-            return None, crawl_headless
-        await _save_wix_sitemap(client, backend_url, headers, project_name, site_map)
-        ok(f"Re-mapeamento concluído — {count} páginas.")
-        return site_map, crawl_headless
-
     # Mapa já existe e não há remap pendente — usa o existente
-    if has_sitemap:
+    if has_sitemap and not pending_remap:
         existing = await _get_wix_sitemap(client, backend_url, headers, project_name)
         if existing:
             info(f"🗺️  Usando mapa existente ({existing.get('pageCount', '?')} páginas).")
-            return existing, crawl_headless
+            return existing
 
-    # Não há mapa — pergunta ao usuário
+    # Remap pedido via formulário
+    if pending_remap:
+        info("🔄 Re-mapeamento solicitado pelo usuário.")
+        await _save_repo_meta(client, backend_url, headers, project_name, {'pendingRemap': False})
+    else:
+        # Não há mapa — pergunta se quer mapear
+        print()
+        info(f"Projeto '{project_name}' é Wix Velo e ainda não foi mapeado.")
+        info("O mapeamento lê todas as páginas do site para acelerar os testes futuros.")
+        print()
+        resp_map = input("  Mapear o site agora? [s/n]: ").strip().lower()
+        if resp_map != 's':
+            info("Mapeamento pulado. Será perguntado novamente na próxima sessão.")
+            return None
+
+    # Pergunta visibilidade — sempre, a cada mapeamento
     print()
-    info(f"Projeto '{project_name}' é Wix Velo e ainda não foi mapeado.")
-    info("O mapeamento lê todas as páginas do site para acelerar os testes futuros.")
-    print()
-
-    resp_map = input("  Mapear o site agora? [s/n]: ").strip().lower()
-    if resp_map != 's':
-        info("Mapeamento pulado. Será perguntado novamente na próxima sessão.")
-        return None, crawl_headless
-
-    # Pergunta preferência de visibilidade do browser (salva por projeto)
-    print()
-    resp_vis = input("  Deseja visualizar o browser durante o mapeamento? [s/n]: ").strip().lower()
-    headless = resp_vis != 's'
-
-    # Salva preferência
-    await _save_repo_meta(client, backend_url, headers, project_name, {'crawlHeadless': headless})
-
+    headless = _ask_headless("Deseja visualizar o browser durante o mapeamento?")
     print()
     info(f"Iniciando mapeamento {'em segundo plano' if headless else 'com browser visível'}...")
     info("Aguarde — percorrendo todas as páginas do site...")
@@ -776,11 +770,11 @@ async def handle_wix_mapping(client, backend_url, headers, project_name, preview
     site_map, count, e = await crawl_wix_site(preview_url, headless=headless)
     if e:
         err(f"Erro no mapeamento: {e}")
-        return None, headless
+        return None
 
     await _save_wix_sitemap(client, backend_url, headers, project_name, site_map)
     ok(f"Mapeamento concluído — {count} páginas mapeadas.")
-    return site_map, headless
+    return site_map
 
 
 async def ensure_repo_path(client, backend_url, headers, project_name):
@@ -1055,10 +1049,10 @@ async def run_job(client, backend_url, headers, job, cerebras_key):
     crawl_headless = job.get('crawl_headless', True)
 
     if project_name and project_type == 'wix_velo':
-        wix_map, _ = await handle_wix_mapping(
+        wix_map = await handle_wix_mapping(
             client, backend_url, headers,
             project_name, job['preview_url'],
-            has_sitemap, pending_remap, crawl_headless
+            has_sitemap, pending_remap
         )
         if wix_map:
             site_map_context = format_site_map_for_agent(wix_map)
@@ -1135,6 +1129,9 @@ async def run_job(client, backend_url, headers, job, cerebras_key):
     )
     print()
 
+    # Pergunta visibilidade do browser — sempre, a cada teste
+    test_headless = _ask_headless("Deseja visualizar o browser durante o teste?")
+    print()
     info("Abrindo Chromium — aguarde...")
     print()
 
@@ -1147,7 +1144,7 @@ async def run_job(client, backend_url, headers, job, cerebras_key):
         description=job.get("description", ""),
         knowledge=job.get("knowledge", ""),
         skills=job.get("skills", ""),
-        headless=False,
+        headless=test_headless,
         cerebras_api_key=cerebras_key,
         site_cache=site_cache,
         code_context=repo_cache_context,   # resumo QA, não código bruto
