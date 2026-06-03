@@ -66,10 +66,13 @@ function CacheCard({ project, onClearCache, onClearRepo, onRemap }) {
   }
 
   async function requestRemap() {
-    if (!confirm(`Solicitar re-mapeamento completo para "${project.name}"?\nO worker vai re-mapear o site no próximo teste.`)) return
+    const msg = project.hasSitemap
+      ? `Solicitar re-mapeamento completo para "${project.name}"?\nO worker vai re-mapear o site no próximo teste.`
+      : `Solicitar mapeamento do site "${project.name}"?\nO worker vai mapear todas as páginas no próximo teste (projeto precisa ser Wix Velo).`
+    if (!confirm(msg)) return
     setRemapping(true)
     try {
-      // Deleta mapa antigo + seta pendingRemap no projeto
+      // Deleta mapa antigo (se houver) + seta pendingRemap no projeto
       await Promise.all([
         fetch(`${API}/projects/${encodeURIComponent(project.name)}/sitemap`, {
           method: 'DELETE', headers: { Authorization: `Bearer ${token()}` }
@@ -81,7 +84,7 @@ function CacheCard({ project, onClearCache, onClearRepo, onRemap }) {
         })
       ])
       onRemap(project.name)
-    } catch { alert('Erro ao solicitar re-mapeamento') }
+    } catch { alert('Erro ao solicitar mapeamento') }
     finally { setRemapping(false) }
   }
 
@@ -190,15 +193,11 @@ function CacheCard({ project, onClearCache, onClearRepo, onRemap }) {
             </button>
           </>
         )}
-        {project.hasSitemap && (
-          <>
-            {(project.hasCache || project.hasRepo) && <span className="text-gray-200 dark:text-gray-700 text-xs">·</span>}
-            <button onClick={requestRemap} disabled={remapping}
-              className="text-xs text-blue-500 hover:text-blue-700 dark:hover:text-blue-300 transition-colors underline">
-              {remapping ? 'Agendando...' : '🔄 Re-mapear'}
-            </button>
-          </>
-        )}
+        {(project.hasCache || project.hasRepo) && <span className="text-gray-200 dark:text-gray-700 text-xs">·</span>}
+        <button onClick={requestRemap} disabled={remapping}
+          className="text-xs text-blue-500 hover:text-blue-700 dark:hover:text-blue-300 transition-colors underline">
+          {remapping ? 'Agendando...' : (project.hasSitemap ? '🔄 Re-mapear' : '🗺️ Mapear site')}
+        </button>
         {project.hasRepo && (
           <>
             {(project.hasCache || project.hasSitemap) && <span className="text-gray-200 dark:text-gray-700 text-xs">·</span>}
