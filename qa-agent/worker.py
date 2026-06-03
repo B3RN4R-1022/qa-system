@@ -33,7 +33,7 @@ from agent import run_qa_agent
 import pathlib as _pathlib
 load_dotenv(_pathlib.Path(__file__).parent / '.env', override=True)
 
-LOCAL_VERSION = "1.4.2"
+LOCAL_VERSION = "1.4.3"
 DEFAULT_BACKEND = os.getenv("BACKEND_URL", "https://qa-system-5vpf.onrender.com").rstrip("/")
 RAW_BASE    = "https://raw.githubusercontent.com/B3RN4R-1022/qa-system/master/qa-agent"
 VERSION_URL = f"{RAW_BASE}/version.txt"
@@ -503,7 +503,7 @@ def format_site_map_for_agent(site_map: dict) -> str:
 # ─── Sumário QA do repositório via Cerebras ──────────────────────────────────
 
 CEREBRAS_URL = "https://api.cerebras.ai/v1/chat/completions"
-CEREBRAS_MODEL = "llama3.1-8b"   # plano free Cerebras — ~2600 tok/s garantido
+CEREBRAS_MODEL = "gpt-oss-120b"   # 3000 tok/s, gratuito no plano free Cerebras
 
 
 async def _cerebras_call(cerebras_key: str, prompt: str, max_tokens: int = 2048) -> str | None:
@@ -527,7 +527,7 @@ async def _cerebras_call(cerebras_key: str, prompt: str, max_tokens: int = 2048)
                     CEREBRAS_URL,
                     headers={"Authorization": f"Bearer {cerebras_key}", "Content-Type": "application/json"},
                     json={
-                        "model": "llama3.3-70b",
+                        "model": "zai-glm-4.7",
                         "messages": [{"role": "user", "content": prompt}],
                         "temperature": 0.1,
                         "max_tokens": max_tokens,
