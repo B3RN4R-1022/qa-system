@@ -232,10 +232,12 @@ def build_llm(cerebras_api_key: str = None):
         api_key = cerebras_api_key or os.getenv("CEREBRAS_API_KEY")
         if not api_key:
             raise ValueError("CEREBRAS_API_KEY não configurada. Adicione nas Configurações do QA System ou no .env do qa-agent")
-        model = os.getenv("CEREBRAS_MODEL", "zai-glm-4.7")
-        # Modelo de fallback: se o primário der 429, troca automaticamente
-        fallback_model = "zai-glm-4.7" if model != "zai-glm-4.7" else "gpt-oss-120b"
-        print(f"[QA Agent] 🧠 Usando Cerebras — modelo: {model} | fallback: {fallback_model} (GRÁTIS)")
+        # llama-3.3-70b é o modelo nativo Cerebras (~2600 tok/s no hardware dedicado)
+        # zai-glm-4.7 e gpt-oss-120b NÃO rodam no hardware Cerebras → 10-20× mais lentos
+        model = os.getenv("CEREBRAS_MODEL", "llama-3.3-70b")
+        # Fallback: llama-3.1-8b é ainda mais rápido quando há 429 no principal
+        fallback_model = "llama-3.1-8b" if model != "llama-3.1-8b" else "llama-3.3-70b"
+        print(f"[QA Agent] ⚡ Usando Cerebras — modelo: {model} | fallback: {fallback_model} (GRÁTIS ~2600 tok/s)")
         base_llm = ChatOpenAI(
             model=model,
             api_key=api_key,
@@ -380,13 +382,13 @@ Projeto: {project_name or 'Não informado'}
 {cache_section}
 
 ## ORÇAMENTO DE STEPS — LEIA ANTES DE COMEÇAR
-Você tem **{max_steps} steps** para este teste (estimado pela IA com base nos critérios).
-Planeje antes de agir:
-- Steps de login: ~2-3
-- Steps por critério: ~2-4
-- Steps para escrever o relatório: ~1
-Assim que tiver verificado TODOS os critérios, escreva o relatório imediatamente e finalize com `done()`.
-**Não continue explorando depois de ter todas as respostas.** Eficiência é mais importante que perfeição.
+Você tem **{max_steps} steps** · cada step executa **até 5 ações** simultaneamente.
+Planeje agrupando ações: ex. digitar email + senha + clicar login = **1 step**.
+Referência:
+- Login: ~1-2 steps  |  Navegação até a feature: ~1-2 steps
+- Por critério: ~2-4 steps  |  Relatório final: ~1 step
+Assim que tiver verificado TODOS os critérios, escreva o relatório e finalize com `done()`.
+**Agrupe tudo que puder em cada step. Velocidade > cautela excessiva.**
 
 ## REGRA CRÍTICA — LEIA PRIMEIRO
 🚫 **NUNCA use a ação `navigate`/`go_to_url`.** A página JÁ ESTÁ ABERTA na URL correta.
@@ -410,18 +412,19 @@ Assim que tiver verificado TODOS os critérios, escreva o relatório imediatamen
 - Use `click_element` no botão de login/entrar
 - Aguarde o carregamento (NÃO navegue, apenas observe a próxima tela)
 
-**PASSO 2 — APÓS LOGIN:**
-- Verifique se o login foi bem-sucedido (deve aparecer dashboard ou área interna)
-- Use `click_element` no botão ou menu de cadastro/registro
-- Inicie o fluxo de cadastro
+**PASSO 2 — NAVEGUE ATÉ A FUNCIONALIDADE:**
+- Confirme que o login funcionou (área interna carregada)
+- Use os critérios de aceitação como guia para saber para onde ir
+- Use `click_element` para navegar pelos menus, sidebar, abas ou links disponíveis
+- Se tiver cache ou mapa do site, vá direto ao ponto — não explore do zero
 
-**PASSO 3 — FLUXO DE CADASTRO:**
-- Use `click_element` no botão "Continuar" para avançar cada etapa
-- Use `input_text` para preencher campos obrigatórios com dados de teste
-- Em campos de upload, use `upload_file` com qualquer arquivo disponível
-- Continue até completar ou encontrar erro
+**PASSO 3 — EXECUTE E VERIFIQUE CADA CRITÉRIO:**
+- Teste cada critério listado, um a um
+- Use `input_text` para preencher formulários com dados de teste realistas
+- Use `upload_file` quando precisar enviar arquivos
+- Agrupe ações consecutivas no mesmo step: ex. preencher 3 campos + clicar = 1 step
 
-**LEMBRE-SE:** Você já está no site. Só interaja com os elementos. NUNCA navegue.
+**LEMBRE-SE:** Você já está no site. Use apenas `click_element`, `input_text`, `scroll`, `upload_file`. NUNCA use `navigate`/`go_to_url`.
 
 ## Verificação de erros visíveis (faça antes de escrever o relatório)
 - Procure na página por mensagens de erro visíveis (banners vermelhos, toasts, texto com "erro", "falha", "inválido")
@@ -577,7 +580,7 @@ async def run_qa_agent(
         use_vision=False,         # DOM-based — lê estrutura da página sem visão
         flash_mode=True,          # schema reduzido (só memory+action) — melhor compatibilidade
         use_thinking=False,       # remove campo thinking do schema
-        max_actions_per_step=3,
+        max_actions_per_step=5,   # 5 ações por step = ~3x mais rápido que o padrão
         max_failures=3,           # 3 falhas consecutivas antes de parar — permite recuperar de tropeços
         available_file_paths=image_paths,
         initial_actions=initial_actions,

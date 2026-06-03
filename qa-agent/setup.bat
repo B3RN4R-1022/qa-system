@@ -48,7 +48,7 @@ if not exist .env (
     (
         echo AI_PROVIDER=cerebras
         echo CEREBRAS_API_KEY=cole_sua_key_aqui
-        echo CEREBRAS_MODEL=zai-glm-4.7
+        echo CEREBRAS_MODEL=llama-3.3-70b
         echo.
         echo BACKEND_URL=https://seu-backend.up.railway.app
         echo BACKEND_TOKEN=qa-system-secret-2024

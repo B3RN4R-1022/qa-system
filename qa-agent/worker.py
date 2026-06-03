@@ -30,7 +30,7 @@ from agent import run_qa_agent
 
 load_dotenv()
 
-LOCAL_VERSION = "1.3.9"
+LOCAL_VERSION = "1.4.0"
 DEFAULT_BACKEND = os.getenv("BACKEND_URL", "https://qa-system-5vpf.onrender.com").rstrip("/")
 RAW_BASE    = "https://raw.githubusercontent.com/B3RN4R-1022/qa-system/master/qa-agent"
 VERSION_URL = f"{RAW_BASE}/version.txt"
@@ -500,7 +500,7 @@ def format_site_map_for_agent(site_map: dict) -> str:
 # ─── Sumário QA do repositório via Cerebras ──────────────────────────────────
 
 CEREBRAS_URL = "https://api.cerebras.ai/v1/chat/completions"
-CEREBRAS_MODEL = "gpt-oss-120b"
+CEREBRAS_MODEL = "llama-3.3-70b"   # hardware nativo Cerebras — ~2600 tok/s
 
 
 async def _cerebras_call(cerebras_key: str, prompt: str, max_tokens: int = 2048) -> str | None:
@@ -519,12 +519,12 @@ async def _cerebras_call(cerebras_key: str, prompt: str, max_tokens: int = 2048)
             )
             data = r.json()
             if r.status_code == 429:
-                # fallback model
+                # fallback model: llama-3.1-8b é ultra-rápido para análises simples
                 r2 = await c.post(
                     CEREBRAS_URL,
                     headers={"Authorization": f"Bearer {cerebras_key}", "Content-Type": "application/json"},
                     json={
-                        "model": "zai-glm-4.7",
+                        "model": "llama-3.1-8b",
                         "messages": [{"role": "user", "content": prompt}],
                         "temperature": 0.1,
                         "max_tokens": max_tokens,
@@ -621,30 +621,31 @@ async def estimate_steps_for_test(
 
     prompt = f"""Quantos steps de browser para este teste QA?
 
-Cada step = 1 ação (clicar, digitar, verificar, rolar, etc).
-Inclua: login, navegação, cada critério, relatório final.
+Cada step = até 5 ações agrupadas (clicar, digitar, verificar, rolar).
+Exemplos: login = 1-2 steps | navegar até a feature = 1-2 steps | verificar critério = 2-4 steps | relatório = 1 step.
+Inclua tudo: login, navegação, critérios, relatório.
 
 Task: {title}
 Critérios: {criteria_str}
 {context_str}
 
-Responda só com o número (entre 6 e 35):"""
+Responda só com o número (entre 10 e 50):"""
 
-    result = await _cerebras_call(cerebras_key, prompt, max_tokens=8)
+    result = await _cerebras_call(cerebras_key, prompt, max_tokens=16)
 
     if result:
         match = _re.search(r'\b(\d+)\b', result.strip())
         if match:
             n = int(match.group(1))
-            estimated = max(6, min(n, 35))
+            estimated = max(10, min(n, 50))
             info(f"🎯 Cerebras estimou {n} steps → usando {estimated}")
             return estimated
         info(f"⚠️  Resposta inesperada da estimativa: '{result.strip()[:40]}' — usando fallback")
     else:
         info("⚠️  Estimativa não retornou resposta — usando fallback")
 
-    # Fallback mais generoso: 8 base + 5 por critério, máx 35
-    fallback = max(8, min(8 + len(criteria) * 5, 35))
+    # Fallback: 10 base + 5 por critério, máx 50
+    fallback = max(10, min(10 + len(criteria) * 5, 50))
     info(f"   Fallback calculado: {fallback} steps")
     return fallback
 
@@ -829,29 +830,302 @@ def ok(msg):    print(f"  ✅ {msg}")
 def err(msg):   print(f"  ❌ {msg}")
 def work(msg):  print(f"  ⚙️  {msg}")
 
-def _ask_analyst_hint(title: str, brief_report: str) -> str | None:
+def _extract_approved_from_report(report: str) -> list[str]:
     """
-    Quando o agente falha ou usa todos os steps, pergunta ao analista
+    Extrai os itens aprovados (✅) do relatório para o agente saber
+    o que já foi verificado e pode pular no retry.
+    """
+    import re as _re
+    approved = []
+    for line in report.split('\n'):
+        # Linha com ✅ ou "- **Algo**: ..." dentro da seção APROVADOS
+        if '✅' in line or ('- **' in line and 'aprovado' in report[:report.find(line)].lower()):
+            clean = _re.sub(r'[*#`]', '', line).strip(' -✅')
+            if clean:
+                approved.append(clean[:100])
+    return approved[:8]  # máx 8 itens
+
+
+def _ask_analyst_hint(title: str, brief_report: str) -> tuple[str | None, str]:
+    """
+    Quando o agente falha ou fica inconclusivo, pergunta ao analista
     se quer fornecer uma dica para tentar novamente.
-    Retorna a dica ou None se o analista preferir aceitar o resultado.
+    Retorna (dica, contexto_do_progresso) — dica é None se o analista pular.
     """
+    import re as _re
+
     print()
     print("  ─────────────────────────────────────────────")
     print(f"  ⚠️  O agente precisou de ajuda em: {title[:60]}")
+
+    # Mostra resumo do que aconteceu
     if brief_report:
         print()
-        for line in brief_report.split('\n')[:6]:
+        for line in brief_report.split('\n')[:8]:
             if line.strip():
                 print(f"     {line.strip()[:90]}")
+
+    # Extrai o que já foi aprovado para o retry poder pular
+    approved = _extract_approved_from_report(brief_report or '')
+    progress_ctx = ""
+    if approved:
+        print()
+        info("Já verificado com sucesso neste teste:")
+        for item in approved:
+            print(f"     ✅ {item}")
+        progress_ctx = (
+            "\n\n## O QUE JÁ FOI VERIFICADO E APROVADO (pule rapidamente):\n" +
+            "\n".join(f"- {a}" for a in approved) +
+            "\nVá direto ao ponto que ainda falta verificar."
+        )
+
     print()
     info("Você pode dar uma dica para o agente tentar novamente.")
     info("Exemplos: 'O botão Salvar está no rodapé da página'")
-    info("          'Após salvar aparece um toast de confirmação'")
+    info("          'Após salvar aparece um toast verde de confirmação'")
     info("          'O item foi salvo, continue para o próximo critério'")
     print()
     hint = input("  Dica (ou Enter para aceitar resultado atual): ").strip()
     print()
-    return hint if hint else None
+    return (hint if hint else None), progress_ctx
+
+
+# ─── Helpers de critério individual ──────────────────────────────────────────
+
+def _criterion_passed(report: str) -> bool:
+    """Determina se um critério foi aprovado baseado no relatório do agente."""
+    import re as _re
+    if not report:
+        return False
+
+    # 1. Linha de CONCLUSÃO — mais confiável
+    m = _re.search(r'🏁\s*CONCLUSÃO\s*:\s*(APROVADO|REPROVADO)', report, _re.IGNORECASE)
+    if m:
+        return m.group(1).upper() == 'APROVADO'
+
+    # 2. Seção REPROVADOS — se tiver itens reais, falhou
+    m_rep = _re.search(
+        r'❌\s*REPROVADOS?\s*:\s*\n(.*?)(?=\n[⚠️🏁📝\n]|\Z)',
+        report, _re.DOTALL | _re.IGNORECASE
+    )
+    if m_rep:
+        section = m_rep.group(1).strip()
+        if section and section.lower() not in ('(nenhum)', '- (nenhum)'):
+            return False
+
+    # 3. Seção APROVADOS com conteúdo real → aprovado
+    m_apr = _re.search(
+        r'✅\s*APROVADOS?\s*:\s*\n(.*?)(?=\n❌|\Z)',
+        report, _re.DOTALL | _re.IGNORECASE
+    )
+    if m_apr:
+        section = m_apr.group(1).strip()
+        if section and section.lower() not in ('(nenhum)', '- (nenhum)'):
+            return True
+
+    return False
+
+
+def _extract_criterion_detail(report: str) -> tuple[str, str, str]:
+    """
+    Extrai detalhes do relatório de um critério individual.
+    Retorna: (detalhe_aprovado, detalhe_reprovado, aviso)
+    """
+    import re as _re
+
+    def _lines(text: str) -> list[str]:
+        return [
+            l.strip().lstrip('-').strip()
+            for l in text.strip().split('\n')
+            if l.strip() and l.strip().lower() not in ('(nenhum)', '- (nenhum)')
+        ]
+
+    approved_detail = ''
+    failed_detail   = ''
+    warning         = ''
+
+    m = _re.search(r'✅\s*APROVADOS?\s*:\s*\n(.*?)(?=\n❌|\n⚠️|\n🏁|\Z)', report, _re.DOTALL | _re.IGNORECASE)
+    if m:
+        approved_detail = '; '.join(_lines(m.group(1))[:3])
+
+    m = _re.search(r'❌\s*REPROVADOS?\s*:\s*\n(.*?)(?=\n⚠️|\n🏁|\Z)', report, _re.DOTALL | _re.IGNORECASE)
+    if m:
+        failed_detail = '; '.join(_lines(m.group(1))[:3])
+
+    m = _re.search(r'⚠️\s*AVISOS?\s*:\s*\n(.*?)(?=\n🏁|\Z)', report, _re.DOTALL | _re.IGNORECASE)
+    if m:
+        warning = '; '.join(_lines(m.group(1))[:2])
+
+    return approved_detail, failed_detail, warning
+
+
+def _compile_final_report(criterion_results: list) -> tuple[str, bool, str | None]:
+    """
+    Compila o relatório final a partir dos resultados por critério.
+    Retorna: (texto_do_relatório, todos_aprovados, último_cache_update)
+    """
+    approved_lines    = []
+    failed_lines      = []
+    warning_lines     = []
+    last_cache_update = None
+
+    for cr in criterion_results:
+        c = cr['criterion']
+        if cr['passed']:
+            detail = cr.get('approved_detail', '')
+            approved_lines.append(f"- {c}" + (f" — {detail}" if detail else ""))
+        else:
+            detail = cr.get('failed_detail', '') or cr.get('approved_detail', '')
+            failed_lines.append(f"- {c}" + (f" — {detail}" if detail else ""))
+        if cr.get('warning'):
+            warning_lines.append(f"- {cr['warning']}")
+        if cr.get('cache_update'):
+            last_cache_update = cr['cache_update']
+
+    all_passed   = len(failed_lines) == 0
+    conclusion   = "APROVADO" if all_passed else "REPROVADO"
+    passed_count = len(approved_lines)
+    total        = len(criterion_results)
+
+    lines = [
+        "✅ APROVADOS:",
+        *(approved_lines or ["- (nenhum)"]),
+        "",
+        "❌ REPROVADOS:",
+        *(failed_lines or ["- (nenhum)"]),
+        "",
+        "⚠️ AVISOS:",
+        *(warning_lines or ["- (nenhum)"]),
+        "",
+        f"🏁 CONCLUSÃO: {conclusion} ({passed_count}/{total} critérios verificados individualmente)",
+    ]
+    return '\n'.join(lines), all_passed, last_cache_update
+
+
+async def _run_single_criterion(
+    job, cerebras_key,
+    criterion, criterion_idx, all_criteria,
+    site_cache, repo_cache_context, site_map_context,
+    test_headless, max_steps,
+    client, backend_url, headers, task_id, job_type,
+) -> dict:
+    """
+    Executa UM único critério de aceitação como sessão de agente independente.
+    Se o critério falhar, pede dica ao analista e tenta novamente (só ele).
+    Retorna: {criterion, passed, approved_detail, failed_detail, warning,
+              cache_update, tokens, cancelled}
+    """
+    info("Abrindo Chromium — aguarde...")
+    print()
+
+    agent_task  = asyncio.create_task(run_qa_agent(
+        title=f"{job['title']} [Crit. {criterion_idx+1}/{len(all_criteria)}]",
+        preview_url=job['preview_url'],
+        criteria=[criterion],
+        project_name=job.get('project_name', ''),
+        description=job.get('description', ''),
+        knowledge=job.get('knowledge', ''),
+        skills=job.get('skills', ''),
+        headless=test_headless,
+        cerebras_api_key=cerebras_key,
+        site_cache=site_cache,
+        code_context=repo_cache_context,
+        site_map=site_map_context,
+        max_steps=max_steps,
+    ))
+    timer_task  = asyncio.create_task(_live_timer(f"Crit. {criterion_idx+1}: {criterion[:30]}"))
+    cancel_task = asyncio.create_task(
+        _watch_cancellation(client, backend_url, headers, task_id, job_type)
+    )
+
+    try:
+        done, pending = await asyncio.wait(
+            {agent_task, cancel_task},
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        for t in pending:
+            t.cancel()
+            try:
+                await t
+            except (asyncio.CancelledError, Exception):
+                pass
+    finally:
+        timer_task.cancel()
+        try:
+            await timer_task
+        except asyncio.CancelledError:
+            pass
+        _clear_line()
+
+    # Cancelado pelo usuário
+    if cancel_task in done and agent_task not in done:
+        return {'criterion': criterion, 'passed': False, 'cancelled': True,
+                'cache_update': None, 'tokens': 0}
+
+    # Lê resultado do agente
+    try:
+        result = agent_task.result()
+    except Exception as e:
+        result = {'success': False, 'report': f'Erro inesperado: {e}',
+                  'tokens_total': 0, 'cache_update': None}
+
+    report       = result.get('report', '')
+    tokens       = result.get('tokens_total', 0) or 0
+    cache_update = result.get('cache_update')
+    passed       = _criterion_passed(report)
+    approved_detail, failed_detail, warning = _extract_criterion_detail(report)
+
+    # Se falhou, pede dica e retenta só este critério
+    if not passed:
+        hint, _ = _ask_analyst_hint(criterion, report)
+        if hint:
+            info(f"🔄 Retentando critério {criterion_idx+1} com a dica...")
+            print()
+            extra_ctx = f"\n\n## DICA DO ANALISTA — leia antes de começar:\n{hint}\n"
+
+            retry_task = asyncio.create_task(run_qa_agent(
+                title=f"{job['title']} [Crit. {criterion_idx+1} — retry]",
+                preview_url=job['preview_url'],
+                criteria=[criterion],
+                project_name=job.get('project_name', ''),
+                description=job.get('description', '') + extra_ctx,
+                knowledge=job.get('knowledge', ''),
+                skills=job.get('skills', ''),
+                headless=test_headless,
+                cerebras_api_key=cerebras_key,
+                site_cache=site_cache,
+                code_context=repo_cache_context,
+                site_map=site_map_context,
+                max_steps=max_steps + 5,
+            ))
+            timer2 = asyncio.create_task(_live_timer(f"[Retry] Crit. {criterion_idx+1}"))
+            try:
+                retry_result   = await retry_task
+                retry_report   = retry_result.get('report', '')
+                passed         = _criterion_passed(retry_report)
+                approved_detail, failed_detail, warning = _extract_criterion_detail(retry_report)
+                tokens        += retry_result.get('tokens_total', 0) or 0
+                cache_update   = retry_result.get('cache_update') or cache_update
+            except Exception as e2:
+                info(f"Retry do critério {criterion_idx+1} falhou: {e2}")
+            finally:
+                timer2.cancel()
+                try:
+                    await timer2
+                except asyncio.CancelledError:
+                    pass
+                _clear_line()
+
+    return {
+        'criterion':       criterion,
+        'passed':          passed,
+        'approved_detail': approved_detail,
+        'failed_detail':   failed_detail,
+        'warning':         warning,
+        'cache_update':    cache_update,
+        'tokens':          tokens,
+        'cancelled':       False,
+    }
 
 
 def _clear_line():
@@ -1194,117 +1468,189 @@ async def run_job(client, backend_url, headers, job, cerebras_key):
     )
     print()
 
-    # Pergunta visibilidade do browser — sempre, a cada teste
+    # Pergunta visibilidade do browser — uma vez para todos os critérios
     test_headless = _ask_headless("Deseja visualizar o browser durante o teste?")
     print()
-    info("Abrindo Chromium — aguarde...")
-    print()
 
-    # Roda agente + watcher de cancelamento em paralelo
-    agent_task  = asyncio.create_task(run_qa_agent(
-        title=job["title"],
-        preview_url=job["preview_url"],
-        criteria=criterios,
-        project_name=project_name,
-        description=job.get("description", ""),
-        knowledge=job.get("knowledge", ""),
-        skills=job.get("skills", ""),
-        headless=test_headless,
-        cerebras_api_key=cerebras_key,
-        site_cache=site_cache,
-        code_context=repo_cache_context,   # resumo QA, não código bruto
-        site_map=site_map_context,
-        max_steps=estimated_steps,
-    ))
-    timer_task  = asyncio.create_task(_live_timer(job["title"]))
-    cancel_task = asyncio.create_task(
-        _watch_cancellation(client, backend_url, headers, task_id, job_type)
-    )
+    # ── MODO CHECKPOINT: cada critério é uma sessão independente ──────────
+    # Se o critério N falha, só ele reabre — 1..N-1 já estão salvos.
+    if criterios:
+        per_criterion_steps = max(20, (estimated_steps // len(criterios)) + 10)
+        info(f"📋 Checkpoints: {len(criterios)} critério(s) | ~{per_criterion_steps} steps · 5 ações/step cada")
+        print()
 
-    try:
-        done, pending = await asyncio.wait(
-            {agent_task, cancel_task},
-            return_when=asyncio.FIRST_COMPLETED
+        criterion_results: list = []
+        accumulated_cache = site_cache
+        cancelled         = False
+
+        for i, criterion in enumerate(criterios):
+            print()
+            sep = '─' * max(1, 37 - len(f"{i+1}/{len(criterios)}"))
+            print(f"  ─── Critério {i+1}/{len(criterios)} {sep}")
+            info(f"▶  {criterion[:80]}")
+            print()
+
+            cr = await _run_single_criterion(
+                job=job,
+                cerebras_key=cerebras_key,
+                criterion=criterion,
+                criterion_idx=i,
+                all_criteria=criterios,
+                site_cache=accumulated_cache,
+                repo_cache_context=repo_cache_context,
+                site_map_context=site_map_context,
+                test_headless=test_headless,
+                max_steps=per_criterion_steps,
+                client=client,
+                backend_url=backend_url,
+                headers=headers,
+                task_id=task_id,
+                job_type=job_type,
+            )
+
+            if cr.get('cancelled'):
+                info("Análise cancelada pelo usuário.")
+                cancelled = True
+                break
+
+            # Cache cresce: cada critério aprende sobre o site e passa adiante
+            if cr.get('cache_update'):
+                accumulated_cache = cr['cache_update']
+
+            icon  = "✅" if cr['passed'] else "❌"
+            label = "APROVADO" if cr['passed'] else "REPROVADO"
+            info(f"{icon} Critério {i+1}/{len(criterios)}: {label}")
+            criterion_results.append(cr)
+
+        # Cancelado antes de qualquer resultado — nada a enviar
+        if not criterion_results:
+            print()
+            print("  ─────────────────────────────────────────────")
+            print()
+            return
+
+        if cancelled:
+            info(f"Interrompido — {len(criterion_results)}/{len(criterios)} critérios executados.")
+
+        # Compila relatório final a partir dos checkpoints
+        print()
+        report, all_passed, cache_update = _compile_final_report(criterion_results)
+        status = "done"
+        tokens = sum(cr.get('tokens', 0) for cr in criterion_results)
+
+        approved_count = sum(1 for cr in criterion_results if cr['passed'])
+        total_ran      = len(criterion_results)
+        if all_passed:
+            ok(f"Resultado: {approved_count}/{total_ran} APROVADOS")
+        else:
+            err(f"Resultado: {approved_count} APROVADOS, {total_ran - approved_count} REPROVADOS de {total_ran}")
+
+    else:
+        # ── MODO LEGADO: sem critérios — agent único ──────────────────────
+        info("Abrindo Chromium — aguarde...")
+        print()
+
+        agent_task  = asyncio.create_task(run_qa_agent(
+            title=job["title"],
+            preview_url=job["preview_url"],
+            criteria=criterios,
+            project_name=project_name,
+            description=job.get("description", ""),
+            knowledge=job.get("knowledge", ""),
+            skills=job.get("skills", ""),
+            headless=test_headless,
+            cerebras_api_key=cerebras_key,
+            site_cache=site_cache,
+            code_context=repo_cache_context,
+            site_map=site_map_context,
+            max_steps=estimated_steps,
+        ))
+        timer_task  = asyncio.create_task(_live_timer(job["title"]))
+        cancel_task = asyncio.create_task(
+            _watch_cancellation(client, backend_url, headers, task_id, job_type)
         )
 
-        # Cancela a task que ainda está pendente
-        for t in pending:
-            t.cancel()
-            try:
-                await t
-            except (asyncio.CancelledError, Exception):
-                pass
-
-    finally:
-        timer_task.cancel()
         try:
-            await timer_task
-        except asyncio.CancelledError:
-            pass
-        _clear_line()
-
-    # ── Usuário cancelou ──────────────────────────────────────────────────
-    if cancel_task in done and agent_task not in done:
-        print()
-        info("Análise cancelada pelo usuário.")
-        print("  ─────────────────────────────────────────────")
-        print()
-        return  # volta ao loop de polling sem postar resultado
-
-    # ── Agente terminou (normal ou erro) ──────────────────────────────────
-    try:
-        result       = agent_task.result()
-        status       = "done" if result["success"] else "error"
-        report       = result["report"]
-        tokens       = result.get("tokens_total")
-        cache_update = result.get("cache_update")
-    except Exception as e:
-        status, report, tokens, cache_update = "error", f"Erro inesperado no agente: {e}", None, None
-
-    # ── Pergunta ao analista se quer dar uma dica e tentar de novo ────────
-    # Aciona quando: erro de execução OU agente usou todos os steps sem conclusão clara
-    should_ask = (
-        status == "error" or
-        (report and any(w in report.lower() for w in [
-            'não foi possível', 'não encontrou', 'não conseguiu',
-            'travado', 'timeout', 'elemento não', 'step limit',
-        ]))
-    )
-    if should_ask:
-        hint = _ask_analyst_hint(job["title"], report or "")
-        if hint:
-            info(f"🔄 Tentando novamente com sua dica...")
-            print()
-            extra_context = f"\n\n## DICA DO ANALISTA (leia com atenção antes de começar):\n{hint}\n"
-            retry_task  = asyncio.create_task(run_qa_agent(
-                title=job["title"],
-                preview_url=job["preview_url"],
-                criteria=criterios,
-                project_name=project_name,
-                description=job.get("description", "") + extra_context,
-                knowledge=job.get("knowledge", ""),
-                skills=job.get("skills", ""),
-                headless=test_headless,
-                cerebras_api_key=cerebras_key,
-                site_cache=site_cache,
-                code_context=repo_cache_context,
-                site_map=site_map_context,
-                max_steps=estimated_steps + 5,  # um pouco mais de margem no retry
-            ))
-            timer2 = asyncio.create_task(_live_timer(f"[Retry] {job['title']}"))
+            done, pending = await asyncio.wait(
+                {agent_task, cancel_task},
+                return_when=asyncio.FIRST_COMPLETED
+            )
+            for t in pending:
+                t.cancel()
+                try:
+                    await t
+                except (asyncio.CancelledError, Exception):
+                    pass
+        finally:
+            timer_task.cancel()
             try:
-                retry_result = await retry_task
-                status       = "done" if retry_result["success"] else "error"
-                report       = retry_result["report"]
-                tokens       = (tokens or 0) + (retry_result.get("tokens_total") or 0)
-                cache_update = retry_result.get("cache_update") or cache_update
-            except Exception as e2:
-                info(f"Retry também falhou: {e2}")
-            finally:
-                timer2.cancel()
-                try: await timer2
-                except: pass
-                _clear_line()
+                await timer_task
+            except asyncio.CancelledError:
+                pass
+            _clear_line()
+
+        if cancel_task in done and agent_task not in done:
+            print()
+            info("Análise cancelada pelo usuário.")
+            print("  ─────────────────────────────────────────────")
+            print()
+            return
+
+        try:
+            result       = agent_task.result()
+            status       = "done" if result["success"] else "error"
+            report       = result["report"]
+            tokens       = result.get("tokens_total")
+            cache_update = result.get("cache_update")
+        except Exception as e:
+            status, report, tokens, cache_update = "error", f"Erro inesperado no agente: {e}", None, None
+
+        # Pergunta ao analista se quer dar uma dica e tentar de novo
+        should_ask = (
+            status == "error" or
+            (report and any(w in report.lower() for w in [
+                'não foi possível', 'não encontrou', 'não conseguiu',
+                'travado', 'timeout', 'elemento não', 'step limit',
+            ]))
+        )
+        if should_ask:
+            hint, progress_ctx = _ask_analyst_hint(job["title"], report or "")
+            if hint:
+                info("🔄 Tentando novamente com sua dica...")
+                print()
+                extra_context = (
+                    progress_ctx +
+                    f"\n\n## DICA DO ANALISTA — leia antes de começar:\n{hint}\n"
+                )
+                retry_task = asyncio.create_task(run_qa_agent(
+                    title=job["title"],
+                    preview_url=job["preview_url"],
+                    criteria=criterios,
+                    project_name=project_name,
+                    description=job.get("description", "") + extra_context,
+                    knowledge=job.get("knowledge", ""),
+                    skills=job.get("skills", ""),
+                    headless=test_headless,
+                    cerebras_api_key=cerebras_key,
+                    site_cache=site_cache,
+                    code_context=repo_cache_context,
+                    site_map=site_map_context,
+                    max_steps=estimated_steps + 5,
+                ))
+                timer2 = asyncio.create_task(_live_timer(f"[Retry] {job['title']}"))
+                try:
+                    retry_result = await retry_task
+                    status       = "done" if retry_result["success"] else "error"
+                    report       = retry_result["report"]
+                    tokens       = (tokens or 0) + (retry_result.get("tokens_total") or 0)
+                    cache_update = retry_result.get("cache_update") or cache_update
+                except Exception as e2:
+                    info(f"Retry também falhou: {e2}")
+                finally:
+                    timer2.cancel()
+                    try: await timer2
+                    except: pass
+                    _clear_line()
 
     if cache_update and project_name:
         info(f"🗃️  Cache do projeto '{project_name}' será atualizado.")
