@@ -587,6 +587,69 @@ Responda APENAS com o JSON atualizado, sem markdown ou explicações."""
     return result
 
 
+async def estimate_steps_for_test(
+    title: str,
+    description: str,
+    criteria: list,
+    has_cache: bool,
+    has_repo_cache: bool,
+    has_site_map: bool,
+    cerebras_key: str,
+) -> int:
+    """
+    Pede ao Cerebras para estimar quantos steps o browser-use vai precisar
+    para executar este teste com base nos critérios e na descrição real da feature.
+    Retorna um inteiro entre 6 e 25.
+    """
+    import re as _re
+
+    context_parts = []
+    if has_cache:      context_parts.append("cache de navegação do site (sabe onde estão os elementos)")
+    if has_repo_cache: context_parts.append("análise do repositório (sabe o que foi implementado)")
+    if has_site_map:   context_parts.append("mapa completo do site (conhece todas as páginas)")
+    context_str = (
+        "Contexto disponível: " + ", ".join(context_parts)
+        if context_parts else
+        "Nenhum contexto prévio — o agente vai explorar o site do zero."
+    )
+
+    criteria_str = "\n".join(f"- {c}" for c in criteria) if criteria else "- Verificação geral de funcionamento"
+
+    prompt = f"""Você é um especialista em automação de testes QA.
+
+Analise a task abaixo e estime quantos "steps" de browser um agente automatizado vai precisar para executar o teste do início ao fim.
+
+Cada step é UMA ação: clicar, digitar, rolar a página, verificar um elemento, etc.
+Conte tudo: login, navegação, execução de cada critério, e escrita do relatório.
+
+Task: {title}
+
+Descrição da feature testada:
+{description.strip() if description else 'Não informada'}
+
+Critérios de aceitação:
+{criteria_str}
+
+{context_str}
+
+Responda SOMENTE com um número inteiro entre 6 e 25. Sem texto, sem explicação."""
+
+    result = await _cerebras_call(cerebras_key, prompt, max_tokens=8)
+
+    if result:
+        match = _re.search(r'\b(\d+)\b', result)
+        if match:
+            n = int(match.group(1))
+            estimated = max(6, min(n, 25))
+            info(f"🎯 Cerebras estimou {n} steps → usando {estimated}")
+            return estimated
+
+    # Fallback se Cerebras falhar
+    fallback = max(8, min(6 + len(criteria) * 3, 20))
+    info(f"⚠️  Estimativa falhou — usando fallback: {fallback} steps")
+    return fallback
+
+
 # ─── Repo: buscar / salvar no backend ────────────────────────────────────────
 
 async def _get_repo_meta(client, backend_url, headers, project_name):
@@ -1059,6 +1122,19 @@ async def run_job(client, backend_url, headers, job, cerebras_key):
                         info("Erro ao atualizar cache — usando versão anterior.")
         print()
 
+    # ── Estimativa inteligente de steps ──────────────────────────────────
+    info("🤖 Estimando steps necessários para o teste...")
+    estimated_steps = await estimate_steps_for_test(
+        title=job["title"],
+        description=job.get("description", ""),
+        criteria=criterios,
+        has_cache=bool(site_cache),
+        has_repo_cache=bool(repo_cache_context),
+        has_site_map=bool(site_map_context),
+        cerebras_key=cerebras_key,
+    )
+    print()
+
     info("Abrindo Chromium — aguarde...")
     print()
 
@@ -1076,6 +1152,7 @@ async def run_job(client, backend_url, headers, job, cerebras_key):
         site_cache=site_cache,
         code_context=repo_cache_context,   # resumo QA, não código bruto
         site_map=site_map_context,
+        max_steps=estimated_steps,
     ))
     timer_task  = asyncio.create_task(_live_timer(job["title"]))
     cancel_task = asyncio.create_task(

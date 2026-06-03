@@ -297,7 +297,7 @@ MAX_CODE_CHARS = 40_000   # máx para código-fonte no prompt
 MAX_MAP_CHARS  = 30_000   # máx para sitemap no prompt
 
 
-def build_task(title: str, preview_url: str, criteria: list, project_name: str, knowledge: str, skills: str, description: str = "", site_cache: str = None, code_context: str = None, site_map: str = None) -> str:
+def build_task(title: str, preview_url: str, criteria: list, project_name: str, knowledge: str, skills: str, description: str = "", site_cache: str = None, code_context: str = None, site_map: str = None, max_steps: int = 15) -> str:
     # Trunca seções variáveis grandes antes de montar o prompt
     # para não estourar o limite de 100k chars do browser-use
     _code = code_context
@@ -378,6 +378,15 @@ Projeto: {project_name or 'Não informado'}
 {code_section}
 
 {cache_section}
+
+## ORÇAMENTO DE STEPS — LEIA ANTES DE COMEÇAR
+Você tem **{max_steps} steps** para este teste (estimado pela IA com base nos critérios).
+Planeje antes de agir:
+- Steps de login: ~2-3
+- Steps por critério: ~2-4
+- Steps para escrever o relatório: ~1
+Assim que tiver verificado TODOS os critérios, escreva o relatório imediatamente e finalize com `done()`.
+**Não continue explorando depois de ter todas as respostas.** Eficiência é mais importante que perfeição.
 
 ## REGRA CRÍTICA — LEIA PRIMEIRO
 🚫 **NUNCA use a ação `navigate`/`go_to_url`.** A página JÁ ESTÁ ABERTA na URL correta.
@@ -527,7 +536,7 @@ async def run_qa_agent(
         browser_profile=BrowserProfile(headless=headless, user_data_dir=temp_profile_dir)
     )
 
-    task_text = build_task(title, preview_url, criteria, project_name, knowledge, skills, description, site_cache=site_cache, code_context=code_context, site_map=site_map)
+    task_text = build_task(title, preview_url, criteria, project_name, knowledge, skills, description, site_cache=site_cache, code_context=code_context, site_map=site_map, max_steps=max_steps)
 
     # Imagens disponíveis para o agente fazer upload quando necessário
     import glob as _glob
