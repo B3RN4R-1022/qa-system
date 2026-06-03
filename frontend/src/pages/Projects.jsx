@@ -171,16 +171,18 @@ function CacheCard({ project, onClearCache, onClearRepo, onRemap, onSetType }) {
               Sem cache UI
             </span>
           )}
+          {project.hasSitemap ? (
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-violet-50 dark:bg-violet-900/20 text-violet-700 dark:text-violet-400 text-[10px] font-medium border border-violet-200 dark:border-violet-800">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="w-2.5 h-2.5"><path strokeLinecap="round" strokeLinejoin="round" d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7" /></svg>
+              {project.sitemapPageCount ? `${project.sitemapPageCount} págs.` : 'Mapeado'}
+            </span>
+          ) : null}
           {project.hasRepo ? (
             <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-400 text-[10px] font-medium border border-blue-200 dark:border-blue-800">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="w-2.5 h-2.5"><path strokeLinecap="round" strokeLinejoin="round" d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" /></svg>
-              Repo: {project.repoFileCount ? `${project.repoFileCount} arq.` : 'configurado'}
+              {project.repoFileCount ? `${project.repoFileCount} arq.` : 'Repo'}
             </span>
-          ) : (
-            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-gray-50 dark:bg-gray-800 text-gray-400 text-[10px] font-medium border border-gray-200 dark:border-gray-700">
-              Sem repo
-            </span>
-          )}
+          ) : null}
         </div>
       </div>
 
@@ -189,10 +191,16 @@ function CacheCard({ project, onClearCache, onClearRepo, onRemap, onSetType }) {
         {project.hasCache && project.cacheUpdatedAt && (
           <p className="text-[11px] text-gray-400">Cache UI atualizado {relativeDate(project.cacheUpdatedAt)}</p>
         )}
+        {project.hasSitemap && (
+          <p className="text-[11px] text-gray-400">
+            🗺️ {project.sitemapPageCount ? `${project.sitemapPageCount} páginas mapeadas` : 'Site mapeado'}
+            {project.sitemapUpdatedAt && <span className="ml-1">· {relativeDate(project.sitemapUpdatedAt)}</span>}
+          </p>
+        )}
         {project.hasRepo && project.repoPath && (
           <p className="text-[11px] text-gray-400 font-mono truncate" title={project.repoPath}>
             📁 {project.repoPath}
-            {project.repoAnalyzedAt && <span className="font-sans ml-1 not-italic">· analisado {relativeDate(project.repoAnalyzedAt)}</span>}
+            {project.repoAnalyzedAt && <span className="font-sans ml-1 not-italic">· analisado {relativeDate(project.repoAnalyzedAt)}{project.repoFileCount ? ` (${project.repoFileCount} arq.)` : ''}</span>}
           </p>
         )}
       </div>
