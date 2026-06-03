@@ -28,7 +28,7 @@ from dotenv import load_dotenv
 import session as sess
 from agent import run_qa_agent
 
-load_dotenv()
+load_dotenv(override=True)  # .env sempre sobrescreve variáveis do sistema
 
 LOCAL_VERSION = "1.4.0"
 DEFAULT_BACKEND = os.getenv("BACKEND_URL", "https://qa-system-5vpf.onrender.com").rstrip("/")
