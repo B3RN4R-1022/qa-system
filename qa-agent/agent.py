@@ -578,7 +578,7 @@ async def run_qa_agent(
         flash_mode=True,          # schema reduzido (só memory+action) — melhor compatibilidade
         use_thinking=False,       # remove campo thinking do schema
         max_actions_per_step=3,
-        max_failures=1,           # para imediatamente no primeiro erro (sem retry infinito)
+        max_failures=3,           # 3 falhas consecutivas antes de parar — permite recuperar de tropeços
         available_file_paths=image_paths,
         initial_actions=initial_actions,
     )

@@ -522,9 +522,18 @@ export default function Chat() {
   const [loadingHistory, setLoadingHistory] = useState(true)
   const [error, setError] = useState(null)
 
-  // Estado do fluxo /teste-qa
+  // Estado do fluxo /teste-qa — persiste no localStorage para sobreviver a navegação
   // phase: 'form' | 'submitting' | 'queued' | 'running' | 'done' | 'error'
-  const [qaFlow, setQaFlow] = useState(null)
+  const [qaFlow, setQaFlow] = useState(() => {
+    try {
+      const saved = localStorage.getItem('qa_flow')
+      if (!saved) return null
+      const parsed = JSON.parse(saved)
+      // Só restaura se ainda estava em andamento (queued/running)
+      if (['queued', 'running'].includes(parsed?.phase)) return parsed
+      return null
+    } catch { return null }
+  })
   const [qaForm, setQaForm] = useState(EMPTY_FORM)
   const [qaFormError, setQaFormError] = useState(null)
   const [existingProjects, setExistingProjects] = useState([])
@@ -542,10 +551,24 @@ export default function Chat() {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages, loading, qaFlow])
 
+  // Persiste qaFlow no localStorage para sobreviver a navegação entre páginas
+  useEffect(() => {
+    if (!qaFlow) {
+      localStorage.removeItem('qa_flow')
+    } else if (['queued', 'running'].includes(qaFlow.phase)) {
+      localStorage.setItem('qa_flow', JSON.stringify(qaFlow))
+    } else {
+      // done/error — mantém no storage só o suficiente para mostrar o resultado,
+      // mas limpa na próxima vez que o componente montar
+      localStorage.removeItem('qa_flow')
+    }
+  }, [qaFlow])
+
   // Polling do status do teste
   useEffect(() => {
     if (!qaFlow?.testId || (qaFlow.phase !== 'queued' && qaFlow.phase !== 'running')) return
-    const interval = setInterval(async () => {
+    // Polling imediato ao montar (caso usuário tenha voltado ao chat)
+    const poll = async () => {
       try {
         const res = await fetch(`${API}/dev-tests/${qaFlow.testId}`, {
           headers: { 'Authorization': `Bearer ${token}` }
@@ -560,7 +583,9 @@ export default function Chat() {
           }))
         }
       } catch {}
-    }, 4000)
+    }
+    poll() // checa imediatamente ao (re)montar
+    const interval = setInterval(poll, 4000)
     return () => clearInterval(interval)
   }, [qaFlow?.testId, qaFlow?.phase])
 
