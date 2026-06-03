@@ -30,7 +30,7 @@ from agent import run_qa_agent
 
 load_dotenv()
 
-LOCAL_VERSION = "1.3.8"
+LOCAL_VERSION = "1.3.9"
 DEFAULT_BACKEND = os.getenv("BACKEND_URL", "https://qa-system-5vpf.onrender.com").rstrip("/")
 RAW_BASE    = "https://raw.githubusercontent.com/B3RN4R-1022/qa-system/master/qa-agent"
 VERSION_URL = f"{RAW_BASE}/version.txt"
@@ -619,42 +619,32 @@ async def estimate_steps_for_test(
 
     criteria_str = "\n".join(f"- {c}" for c in criteria) if criteria else "- Verificação geral de funcionamento"
 
-    prompt = f"""Você é um especialista em automação de testes QA.
+    prompt = f"""Quantos steps de browser para este teste QA?
 
-Analise a task abaixo e estime quantos "steps" de browser um agente automatizado vai precisar.
-
-Cada step é UMA ação: clicar, digitar, rolar, verificar elemento, etc.
-Conte tudo: login, navegação, cada critério, escrita do relatório.
+Cada step = 1 ação (clicar, digitar, verificar, rolar, etc).
+Inclua: login, navegação, cada critério, relatório final.
 
 Task: {title}
-
-Descrição:
-{description.strip() if description else 'Não informada'}
-
-Critérios:
-{criteria_str}
-
+Critérios: {criteria_str}
 {context_str}
 
-IMPORTANTE: responda APENAS com o número inteiro, nada mais.
-Exemplos de resposta válida: 8   |   12   |   17
-Número deve estar entre 6 e 25."""
+Responda só com o número (entre 6 e 35):"""
 
-    result = await _cerebras_call(cerebras_key, prompt, max_tokens=16)
+    result = await _cerebras_call(cerebras_key, prompt, max_tokens=8)
 
     if result:
         match = _re.search(r'\b(\d+)\b', result.strip())
         if match:
             n = int(match.group(1))
-            estimated = max(6, min(n, 25))
+            estimated = max(6, min(n, 35))
             info(f"🎯 Cerebras estimou {n} steps → usando {estimated}")
             return estimated
-        # Cerebras respondeu mas sem número reconhecível
         info(f"⚠️  Resposta inesperada da estimativa: '{result.strip()[:40]}' — usando fallback")
     else:
         info("⚠️  Estimativa não retornou resposta — usando fallback")
 
-    fallback = max(8, min(6 + len(criteria) * 3, 20))
+    # Fallback mais generoso: 8 base + 5 por critério, máx 35
+    fallback = max(8, min(8 + len(criteria) * 5, 35))
     info(f"   Fallback calculado: {fallback} steps")
     return fallback
 
@@ -838,6 +828,31 @@ def info(msg):  print(f"  ℹ  {msg}")
 def ok(msg):    print(f"  ✅ {msg}")
 def err(msg):   print(f"  ❌ {msg}")
 def work(msg):  print(f"  ⚙️  {msg}")
+
+def _ask_analyst_hint(title: str, brief_report: str) -> str | None:
+    """
+    Quando o agente falha ou usa todos os steps, pergunta ao analista
+    se quer fornecer uma dica para tentar novamente.
+    Retorna a dica ou None se o analista preferir aceitar o resultado.
+    """
+    print()
+    print("  ─────────────────────────────────────────────")
+    print(f"  ⚠️  O agente precisou de ajuda em: {title[:60]}")
+    if brief_report:
+        print()
+        for line in brief_report.split('\n')[:6]:
+            if line.strip():
+                print(f"     {line.strip()[:90]}")
+    print()
+    info("Você pode dar uma dica para o agente tentar novamente.")
+    info("Exemplos: 'O botão Salvar está no rodapé da página'")
+    info("          'Após salvar aparece um toast de confirmação'")
+    info("          'O item foi salvo, continue para o próximo critério'")
+    print()
+    hint = input("  Dica (ou Enter para aceitar resultado atual): ").strip()
+    print()
+    return hint if hint else None
+
 
 def _clear_line():
     sys.stdout.write('\r' + ' ' * 72 + '\r')
@@ -1242,9 +1257,54 @@ async def run_job(client, backend_url, headers, job, cerebras_key):
         status       = "done" if result["success"] else "error"
         report       = result["report"]
         tokens       = result.get("tokens_total")
-        cache_update = result.get("cache_update")  # novo campo — cache do site
+        cache_update = result.get("cache_update")
     except Exception as e:
         status, report, tokens, cache_update = "error", f"Erro inesperado no agente: {e}", None, None
+
+    # ── Pergunta ao analista se quer dar uma dica e tentar de novo ────────
+    # Aciona quando: erro de execução OU agente usou todos os steps sem conclusão clara
+    should_ask = (
+        status == "error" or
+        (report and any(w in report.lower() for w in [
+            'não foi possível', 'não encontrou', 'não conseguiu',
+            'travado', 'timeout', 'elemento não', 'step limit',
+        ]))
+    )
+    if should_ask:
+        hint = _ask_analyst_hint(job["title"], report or "")
+        if hint:
+            info(f"🔄 Tentando novamente com sua dica...")
+            print()
+            extra_context = f"\n\n## DICA DO ANALISTA (leia com atenção antes de começar):\n{hint}\n"
+            retry_task  = asyncio.create_task(run_qa_agent(
+                title=job["title"],
+                preview_url=job["preview_url"],
+                criteria=criterios,
+                project_name=project_name,
+                description=job.get("description", "") + extra_context,
+                knowledge=job.get("knowledge", ""),
+                skills=job.get("skills", ""),
+                headless=test_headless,
+                cerebras_api_key=cerebras_key,
+                site_cache=site_cache,
+                code_context=repo_cache_context,
+                site_map=site_map_context,
+                max_steps=estimated_steps + 5,  # um pouco mais de margem no retry
+            ))
+            timer2 = asyncio.create_task(_live_timer(f"[Retry] {job['title']}"))
+            try:
+                retry_result = await retry_task
+                status       = "done" if retry_result["success"] else "error"
+                report       = retry_result["report"]
+                tokens       = (tokens or 0) + (retry_result.get("tokens_total") or 0)
+                cache_update = retry_result.get("cache_update") or cache_update
+            except Exception as e2:
+                info(f"Retry também falhou: {e2}")
+            finally:
+                timer2.cancel()
+                try: await timer2
+                except: pass
+                _clear_line()
 
     if cache_update and project_name:
         info(f"🗃️  Cache do projeto '{project_name}' será atualizado.")
