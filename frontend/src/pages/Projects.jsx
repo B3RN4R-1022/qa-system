@@ -255,9 +255,19 @@ function CacheCard({ project, onClearCache, onClearRepo, onRemap, onSetType }) {
           </>
         )}
         {(project.hasCache || project.hasRepo) && <span className="text-gray-200 dark:text-gray-700 text-xs">·</span>}
-        <button onClick={requestRemap} disabled={remapping}
-          className="text-xs text-blue-500 hover:text-blue-700 dark:hover:text-blue-300 transition-colors underline">
-          {remapping ? 'Agendando...' : (project.hasSitemap ? '🔄 Re-mapear' : '🗺️ Mapear site')}
+        <button
+          onClick={requestRemap}
+          disabled={remapping}
+          title={project.hasSitemap ? 'Re-mapear site' : 'Mapear site'}
+          className={`p-1 rounded-lg transition-colors disabled:opacity-50 ${
+            remapping
+              ? 'text-blue-400 animate-pulse'
+              : 'text-gray-400 hover:text-blue-500 dark:hover:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/20'
+          }`}
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} className="w-4 h-4">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7" />
+          </svg>
         </button>
         {project.hasRepo && (
           <>
