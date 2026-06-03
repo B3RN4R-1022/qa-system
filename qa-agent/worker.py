@@ -28,9 +28,12 @@ from dotenv import load_dotenv
 import session as sess
 from agent import run_qa_agent
 
-load_dotenv(override=True)  # .env sempre sobrescreve variáveis do sistema
+# Carrega o .env do mesmo diretório do worker.py, independente do cwd
+# override=True garante que o .env prevalece sobre vars de sistema/sessão anterior
+import pathlib as _pathlib
+load_dotenv(_pathlib.Path(__file__).parent / '.env', override=True)
 
-LOCAL_VERSION = "1.4.0"
+LOCAL_VERSION = "1.4.1"
 DEFAULT_BACKEND = os.getenv("BACKEND_URL", "https://qa-system-5vpf.onrender.com").rstrip("/")
 RAW_BASE    = "https://raw.githubusercontent.com/B3RN4R-1022/qa-system/master/qa-agent"
 VERSION_URL = f"{RAW_BASE}/version.txt"
