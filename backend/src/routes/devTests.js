@@ -101,6 +101,30 @@ router.get('/:id', async (req, res) => {
   }
 })
 
+// POST /dev-tests/:id/rerun — re-enfileira um teste já concluído ou com erro
+router.post('/:id/rerun', async (req, res) => {
+  try {
+    const test = await prisma.devTest.findUnique({ where: { id: req.params.id } })
+    if (!test) return res.status(404).json({ error: 'Teste não encontrado' })
+    if (req.user.role === 'dev' && test.userId !== req.user.id) {
+      return res.status(403).json({ error: 'Sem permissão' })
+    }
+    // Só permite re-run em testes finalizados (não re-fila o que já está na fila)
+    if (test.status === 'queued' || test.status === 'running') {
+      return res.status(400).json({ error: 'Teste já está em execução' })
+    }
+    const updated = await prisma.devTest.update({
+      where: { id: req.params.id },
+      data: { status: 'queued', report: null, tokensUsed: null, userId: req.user.id },
+      include: { user: { select: { name: true, email: true } } }
+    })
+    res.json(updated)
+  } catch (err) {
+    console.error('[dev-tests POST /:id/rerun]', err.message)
+    res.status(500).json({ error: 'Erro ao re-enfileirar teste' })
+  }
+})
+
 // DELETE /dev-tests/:id — cancela/remove um teste
 router.delete('/:id', async (req, res) => {
   try {

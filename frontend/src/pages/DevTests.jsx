@@ -51,11 +51,13 @@ const FILTER_OPTIONS = [
   { value: 'error',   label: 'Com erro' },
 ]
 
-function TestCard({ test, onDelete, isQA }) {
+function TestCard({ test, onDelete, onRerun, isQA }) {
   const [expanded, setExpanded] = useState(false)
   const [deleting, setDeleting] = useState(false)
+  const [rerunning, setRerunning] = useState(false)
 
   const isActive = test.status === 'queued' || test.status === 'running'
+  const isFinished = test.status === 'done' || test.status === 'error'
   const criteria = test.criteria ? JSON.parse(test.criteria) : []
   const token = localStorage.getItem('qa_token')
 
@@ -69,6 +71,22 @@ function TestCard({ test, onDelete, isQA }) {
       })
       onDelete(test.id)
     } catch { setDeleting(false) }
+  }
+
+  async function handleRerun() {
+    setRerunning(true)
+    try {
+      const res = await fetch(`${API}/dev-tests/${test.id}/rerun`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}` }
+      })
+      const data = await res.json()
+      if (res.ok) {
+        onRerun(data)
+        setExpanded(false)
+      }
+    } catch {}
+    finally { setRerunning(false) }
   }
 
   return (
@@ -153,6 +171,23 @@ function TestCard({ test, onDelete, isQA }) {
                 {expanded ? 'Fechar' : 'Ver relatório'}
               </button>
             )}
+            {isFinished && (
+              <button
+                onClick={handleRerun}
+                disabled={rerunning}
+                title="Re-executar este teste com os mesmos dados"
+                className="text-xs text-violet-500 hover:text-violet-700 dark:hover:text-violet-300 px-2 py-1 rounded-lg border border-violet-200 dark:border-violet-800 hover:bg-violet-50 dark:hover:bg-violet-900/10 disabled:opacity-50 transition-colors flex items-center gap-1"
+              >
+                {rerunning ? (
+                  <svg className="w-3 h-3 animate-spin" viewBox="0 0 24 24" fill="none"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
+                ) : (
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="w-3 h-3">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                  </svg>
+                )}
+                {rerunning ? 'Enfileirando...' : 'Re-executar'}
+              </button>
+            )}
             <button
               onClick={handleDelete}
               disabled={deleting}
@@ -212,6 +247,10 @@ export default function DevTests() {
 
   function handleDelete(id) {
     setTests(prev => prev.filter(t => t.id !== id))
+  }
+
+  function handleRerun(updatedTest) {
+    setTests(prev => prev.map(t => t.id === updatedTest.id ? updatedTest : t))
   }
 
   const testsFiltrados = tests.filter(t =>
@@ -305,6 +344,7 @@ export default function DevTests() {
               key={test.id}
               test={test}
               onDelete={handleDelete}
+              onRerun={handleRerun}
               isQA={isQA || isAdmin}
             />
           ))}
