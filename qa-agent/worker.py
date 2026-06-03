@@ -617,36 +617,41 @@ async def estimate_steps_for_test(
 
     prompt = f"""Você é um especialista em automação de testes QA.
 
-Analise a task abaixo e estime quantos "steps" de browser um agente automatizado vai precisar para executar o teste do início ao fim.
+Analise a task abaixo e estime quantos "steps" de browser um agente automatizado vai precisar.
 
-Cada step é UMA ação: clicar, digitar, rolar a página, verificar um elemento, etc.
-Conte tudo: login, navegação, execução de cada critério, e escrita do relatório.
+Cada step é UMA ação: clicar, digitar, rolar, verificar elemento, etc.
+Conte tudo: login, navegação, cada critério, escrita do relatório.
 
 Task: {title}
 
-Descrição da feature testada:
+Descrição:
 {description.strip() if description else 'Não informada'}
 
-Critérios de aceitação:
+Critérios:
 {criteria_str}
 
 {context_str}
 
-Responda SOMENTE com um número inteiro entre 6 e 25. Sem texto, sem explicação."""
+IMPORTANTE: responda APENAS com o número inteiro, nada mais.
+Exemplos de resposta válida: 8   |   12   |   17
+Número deve estar entre 6 e 25."""
 
-    result = await _cerebras_call(cerebras_key, prompt, max_tokens=8)
+    result = await _cerebras_call(cerebras_key, prompt, max_tokens=16)
 
     if result:
-        match = _re.search(r'\b(\d+)\b', result)
+        match = _re.search(r'\b(\d+)\b', result.strip())
         if match:
             n = int(match.group(1))
             estimated = max(6, min(n, 25))
             info(f"🎯 Cerebras estimou {n} steps → usando {estimated}")
             return estimated
+        # Cerebras respondeu mas sem número reconhecível
+        info(f"⚠️  Resposta inesperada da estimativa: '{result.strip()[:40]}' — usando fallback")
+    else:
+        info("⚠️  Estimativa não retornou resposta — usando fallback")
 
-    # Fallback se Cerebras falhar
     fallback = max(8, min(6 + len(criteria) * 3, 20))
-    info(f"⚠️  Estimativa falhou — usando fallback: {fallback} steps")
+    info(f"   Fallback calculado: {fallback} steps")
     return fallback
 
 
