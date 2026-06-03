@@ -83,20 +83,21 @@ sugerir alteração — acionando os botões nativos de aprovação do Asana.
 
 ## Modelos do banco (prisma/schema.prisma)
 
-- **QATask** — task em QA. Campos: asanaId, title, description, previewUrl, assignee, status, projectName, wasRejectedBefore, wasSuggestedBefore
+- **QATask** — task em QA. Campos: asanaId, title, description, previewUrl, assignee, **assigneeEmail** (novo — capturado do Asana via webhook para match exato no Dashboard), status, projectName, wasRejectedBefore, wasSuggestedBefore
 - **QACheck** — item do checklist (label, checked) ligado à QATask
 - **QAComment** — histórico de comentários local (type, text) ligado à QATask
 - **QAEvent** — registro PERMANENTE de cada ação para gráficos (asanaId, action, projectName, assignee, wasFirstApproval). NÃO deletado nas limpezas automáticas.
-- **User** — name, email, password (bcrypt), **role** (`qa`|`dev`|`admin`), totpSecret
+- **User** — name, email, password (bcrypt), **role** (`qa`|`dev`|`admin`), totpSecret; relações: devTests[], **aiReports[]** (novo)
 - **ChatMessage** — histórico do chat por usuário (**userId** isolado por conta), role, content
-- **AIKnowledge** — base de conhecimento + configs do sistema. Campo `type` agora tem vários usos:
-  - `skill` / `project` — base de conhecimento da IA (chat + agente)
+- **AIKnowledge** — base de conhecimento + configs do sistema. Campo `type`:
+  - `skill` / `project` — base de conhecimento da IA
   - `config` / `cerebras_api_key` — key da IA
-  - `site_cache` / `<projeto>` — **cache de UI:** o que o agente aprendeu navegando no site (JSON: navigation/loginFlow/knownRoutes/uiPatterns/notes)
-  - `project_repo` / `<projeto>` — **config do projeto** (JSON): `repoPath`, `lastCommit`, `analyzedAt`, `fileCount`, `projectType` (`wix_velo`|`wix_headless`|`repo`), `crawlHeadless`, `pendingRemap`
-  - `wix_sitemap` / `<projeto>` — **mapa do site Wix Velo** (JSON: baseUrl, pageCount, pages{})
-- **AIReport** — relatório do agente por task. Campos: taskId (unique), status (`queued`|`running`|`done`|`error`), report, **tokensUsed** (Int?). ⚠️ **Falta `userId`** (ver backlog: fila por usuário)
-- **DevTest** — teste manual iniciado por dev via `/teste-qa` no chat. Campos: userId, title, description, previewUrl, projectName, criteria (JSON), status, report, tokensUsed
+  - `site_cache` / `<projeto>` — cache de UI (JSON: navigation/loginFlow/knownRoutes/uiPatterns/notes)
+  - `project_repo` / `<projeto>` — config do projeto (JSON): `repoPath`, `lastCommit`, `analyzedAt`, `fileCount`, `projectType`, `pendingRemap`
+  - `repo_cache` / `<projeto>` — **resumo QA do repositório** gerado pela Cerebras (JSON estruturado: rotas, features, auth, endpoints, regras de negócio). Não armazena código bruto.
+  - `wix_sitemap` / `<projeto>` — mapa do site Wix Velo (JSON: baseUrl, pageCount, pages{})
+- **AIReport** — relatório do agente por task. Campos: taskId (unique), **userId** (novo — quem enfileirou, para isolamento de fila), status, report, tokensUsed
+- **DevTest** — teste manual iniciado por dev. Campos: userId, title, description, previewUrl, projectName, criteria (JSON), status, report, tokensUsed
 
 > **DIRECT_URL (CRÍTICO para migrations):** `DATABASE_URL` porta 6543 (Transaction Pooler).
 > `DIRECT_URL` porta 5432 (Session Pooler, migrations). Usar `npx prisma db push`.
@@ -108,8 +109,8 @@ sugerir alteração — acionando os botões nativos de aprovação do Asana.
 ### Públicas
 - `POST /auth/register` — exige `registerSecret` + `role` opcional (`qa`|`dev`)
 - `POST /auth/login` — valida credenciais; cookie `trusted_device` pula TOTP; JWT inclui `role`
-- `POST /auth/verify-totp` — valida TOTP, retorna JWT + cookie; JWT inclui `role`
-- `POST /webhook` — recebe eventos do Asana
+- `POST /auth/verify-totp` — valida TOTP, retorna JWT + cookie
+- `POST /webhook` — recebe eventos do Asana; agora salva **assigneeEmail** além do nome
 
 ### Protegidas (Bearer JWT)
 - `GET /tasks` — lista tasks
@@ -117,21 +118,19 @@ sugerir alteração — acionando os botões nativos de aprovação do Asana.
 - `GET /stats?period=7d|30d|6m` — analytics
 - `POST /admin/setup-webhooks` — re-registra webhooks
 - `DELETE /admin/clear-test-data` — apaga dados de teste
-- `GET|POST|DELETE /chat/history`, `POST /chat/message` — chat **isolado por userId**, agora via **Cerebras** (key do banco)
-- `GET|POST|DELETE /tasks/:id/ai-report` — relatório IA (DELETE limpa stuck)
-- `POST /tasks/:id/run-ai-qa` — enfileira análise (`status='queued'`)
-- `GET|POST|DELETE /settings/ai` — config IA (key mascarada + tokens hoje)
-- `GET /qa-jobs/pending` — **Pull model:** worker busca próximo job (AIReport OU DevTest). Retorna também: `site_cache`, `project_type`, `has_sitemap`, `pending_remap`, `crawl_headless`
-- `POST /qa-jobs/:id/claim` — worker reivindica job; body: `{ type: 'qa_task'|'dev_test' }`
-- `POST /qa-jobs/:id/result` — worker posta resultado; body: `{ status, report, tokensUsed, type, siteCache?, projectName? }` (siteCache salva o cache de UI)
-- `GET /dev-tests` — lista DevTests (dev=só seus, QA=todos)
-- `POST /dev-tests` — cria e enfileira DevTest; aceita `projectType` + `requestRemap` (salvos no `project_repo`)
-- `GET /dev-tests/:id` — status/resultado de um DevTest
-- `DELETE /dev-tests/:id` — cancela/remove DevTest
-- `GET /projects` — lista projetos com stats: testCount, hasCache, hasRepo (repoPath/fileCount/analyzedAt), projectType, hasSitemap/sitemapPageCount
-- `GET|PUT|DELETE /projects/:name/repo` — config do repo/tipo (JSON em `project_repo`). PUT faz merge
-- `GET|PUT|DELETE /projects/:name/sitemap` — mapa do site Wix Velo (`wix_sitemap`)
-- `GET|DELETE /projects/:name/cache` — cache de UI do agente (`site_cache`)
+- `GET|POST|DELETE /chat/history`, `POST /chat/message` — chat isolado por userId, via Cerebras
+- `GET|POST|DELETE /tasks/:id/ai-report` — relatório IA
+- `POST /tasks/:id/run-ai-qa` — enfileira análise; **seta userId = req.user.id no AIReport**
+- `GET|POST|DELETE /settings/ai` — config IA
+- `GET /qa-jobs/pending` — Pull model: worker busca próximo job **filtrado por userId** (isolamento por usuário). Retorna: `site_cache`, `repo_cache`, `project_type`, `has_sitemap`, `pending_remap`
+- `POST /qa-jobs/:id/claim` — worker reivindica job
+- `POST /qa-jobs/:id/result` — worker posta resultado; `siteCache+projectName` salva cache de UI
+- `GET /dev-tests`, `POST /dev-tests`, `GET /dev-tests/:id`, `DELETE /dev-tests/:id`
+- `GET /projects` — lista projetos com stats: testCount, hasCache, hasRepo, **hasRepoCache**, **repoCacheUpdatedAt**, projectType, hasSitemap/sitemapPageCount, repoFileCount
+- `GET|PUT|DELETE /projects/:name/repo` — config do repo/tipo (merge no PUT)
+- `GET|PUT|DELETE /projects/:name/repo-cache` — **resumo QA do repositório** (DELETE também limpa lastCommit para forçar re-análise)
+- `GET|PUT|DELETE /projects/:name/sitemap` — mapa Wix Velo
+- `GET|DELETE /projects/:name/cache` — cache de UI
 
 ---
 
@@ -142,94 +141,80 @@ sugerir alteração — acionando os botões nativos de aprovação do Asana.
 ```
 Usuário clica "Executar análise" (QAReview) OU submete /teste-qa (Chat)
     ↓
-Backend salva AIReport{status:'queued'} ou DevTest{status:'queued'}
+Backend salva AIReport{status:'queued', userId} ou DevTest{status:'queued', userId}
     ↓
-worker.py (local) → GET /qa-jobs/pending a cada 5s → pega o job mais antigo
+worker.py (local) → GET /qa-jobs/pending?userId a cada 5s → pega só os jobs DO próprio usuário
     ↓
 POST /qa-jobs/:id/claim { type } → (queued → running)
     ↓
-[NOVO] Pré-análise conforme projectType:
+Pré-análise conforme projectType:
   - wix_velo     → crawler Playwright mapeia o site (0 tokens) → site_map no prompt
-  - repo/headless → lê repo local (full na 1ª vez, git diff depois) → code_context no prompt
+  - repo/headless → lê repo local (full na 1ª vez, git diff depois)
+                  → Cerebras resume para JSON QA (rotas/features/auth/etc) → salva repo_cache
+                  → agente recebe resumo (~2-3k chars), NÃO o código bruto
     ↓
-agent.py abre Chromium (perfil temporário isolado) → testa → retorna resultado + cache_update + console logs
-Em paralelo: _watch_cancellation() verifica a cada 5s se job ainda existe
-Se usuário cancelar no frontend → asyncio.CancelledError para o agente → volta ao polling
+Cerebras estima quantos steps o teste precisa (prompt curto, resposta = número inteiro)
+Fallback: 8 + 5×critérios, máx 35
+    ↓
+Pergunta: "Deseja visualizar o browser durante o teste? [s/n]" (a cada execução, sem salvar)
+    ↓
+agent.py abre Chromium (perfil temporário isolado) → testa → retorna resultado
+Em paralelo: _watch_cancellation() verifica cancelamento a cada 5s
+    ↓
+Se agente falhou/ficou inconclusivo:
+  → Pergunta ao analista: "Dica (ou Enter para aceitar resultado atual):"
+  → Se der dica: retry com contexto do que já foi aprovado + a dica (estimated_steps + 5)
     ↓
 POST /qa-jobs/:id/result { status, report, tokensUsed, type, siteCache?, projectName? }
     ↓
-Frontend polling /ai-report (QATask) ou /dev-tests/:id (DevTest) a cada 4s → exibe relatório
+Frontend polling /ai-report ou /dev-tests/:id a cada 4s → exibe relatório
+(qaFlow persiste no localStorage — se navegar e voltar, retoma polling automaticamente)
 ```
 
 ### Contexto que o agente recebe no prompt (build_task)
-Camadas opcionais, montadas conforme o projeto:
 1. **description** — descrição da feature/task
 2. **criteria** — critérios de aceitação
-3. **skills** — instruções gerais de QA (AIKnowledge)
-4. **knowledge** — base de conhecimento do projeto (AIKnowledge)
+3. **skills** — instruções gerais de QA
+4. **knowledge** — base de conhecimento do projeto
 5. **site_map** — mapa Wix Velo (navegação completa, formulários, botões por página)
-6. **code_context** — código-fonte (repo full na 1ª vez, git diff depois)
-7. **site_cache** — o que o agente aprendeu em testes anteriores no browser
-+ regras: nunca navegar (página já aberta), **descartar credenciais** (nunca no relatório), verificar erros visíveis, e ao final emitir `🗃️ CACHE_UPDATE_START...END` (o worker extrai e salva como site_cache)
+6. **code_context** — **resumo QA do repo** gerado pela Cerebras (não código bruto)
+7. **site_cache** — o que o agente aprendeu em testes anteriores
+8. **max_steps** — orçamento de steps visível no prompt ("Você tem X steps")
++ regras: nunca navegar, descartar credenciais, ao final emitir `🗃️ CACHE_UPDATE_START...END`
 
 ### Arquivos qa-agent/
 
 | Arquivo | Descrição |
 |---------|-----------|
-| `worker.py` | **v1.3.0.** Login terminal, spinner/timer ao vivo, loop de jobs, watcher de cancelamento. **+ análise de repo local** (`analyze_repo_full`/`analyze_repo_diff`, respeita .gitignore + skip list), **+ crawler Wix Velo** (`crawl_wix_site` recursivo, 0 tokens), `ensure_repo_path`, `handle_wix_mapping`. Instalado em `C:\Users\<user>\NocorpQAAgent\`. |
-| `session.py` | **Cross-platform:** Windows=DPAPI, macOS=Keychain (`security` CLI), Linux=arquivo chmod 600. JWT + Cerebras key nunca em texto puro. |
-| `agent.py` | browser-use wrapper: BrowserUseLLM, build_llm, token tracking. **+ perfil de browser temporário isolado por teste** (descarta cookies/sessão, sem vazamento entre users), **+ captura de console logs** (Playwright events), **+ params site_map/code_context/site_cache**, **+ parse do CACHE_UPDATE**. |
-| `main.py` | FastAPI antigo — mantido para compatibilidade, não usado no fluxo principal. |
-| `version.txt` | Versão atual (`1.3.0`). Worker verifica ao iniciar e avisa se há nova. |
-| `install.ps1` | **Windows:** `irm .../install.ps1 \| iex`. Sempre recria o venv. Headers no-cache nos downloads. Para em erro. Atalho via `[Environment]::GetFolderPath("Desktop")`. |
-| `install.sh` | **macOS:** `curl -fsSL .../install.sh \| bash`. Python via Homebrew, atalho `.command` no Finder, remove quarentena. |
-| `requirements.txt` | `browser-use==0.12.9`, `openai==2.16.0`, `langchain-openai`, `langchain-ollama`, `playwright`. SEM `langchain-groq` (incompatível com browser-use — exige groq opostos). |
+| `worker.py` | **v1.3.9.** Login terminal, spinner/timer, loop de jobs, watcher de cancelamento. Auto-update (baixa só .py ao iniciar, reinicia sozinho). `estimate_steps_for_test()` (Cerebras estima steps por teste). `summarize_repo_for_qa()` + `update_repo_cache_with_diff()` (Cerebras resume repo → repo_cache). `_ask_analyst_hint()` (analista dá dica quando agente trava, retry com contexto do progresso). Pergunta visibilidade do browser a cada execução. |
+| `session.py` | Cross-platform: Windows=DPAPI, macOS=Keychain, Linux=chmod 600. |
+| `agent.py` | browser-use wrapper. `max_failures=3` (3 tentativas antes de parar). Prompt inclui orçamento de steps. Truncagem de `code_context` (40k) e `site_map` (30k) para não estourar limite de 100k chars do browser-use. |
+| `version.txt` | Versão atual (`1.3.9`). **LOCAL_VERSION em worker.py SEMPRE deve bater com este arquivo.** |
+| `install.ps1` | Windows: `irm .../install.ps1 \| iex`. Necessário só na primeira instalação. |
+| `install.sh` | macOS: `curl -fsSL .../install.sh \| bash`. |
 
-### Instalação
+### Auto-update
+Ao iniciar, o worker compara `LOCAL_VERSION` com `version.txt` no GitHub.
+Se houver atualização: pergunta ao usuário → baixa apenas `worker.py`, `agent.py`, `session.py`, `version.txt` (~50KB total, sem tocar no venv) → reinicia automaticamente com `os.execv`.
 
-**Windows (PowerShell como Admin):**
+**Instalador completo só necessário na primeira instalação.**
+
+### Instalação (primeira vez)
+
+**Windows:**
 ```powershell
 irm https://raw.githubusercontent.com/B3RN4R-1022/qa-system/master/qa-agent/install.ps1 | iex
 ```
-
-**macOS (Terminal):**
+**macOS:**
 ```bash
 curl -fsSL https://raw.githubusercontent.com/B3RN4R-1022/qa-system/master/qa-agent/install.sh | bash
-```
-
-Instalado em: `C:\Users\<user>\NocorpQAAgent\` (Windows) ou `~/NocorpQAAgent/` (macOS)
-
-### Fluxo de primeiro uso (terminal)
-
-```
-✅ Backend online.
-Email: bernardo@nocorp.io
-Senha: ••••••••
-✅ Login realizado — sessão válida 30 dias
-
-Cole sua Cerebras API key (csk-...): csk-xxx
-✅ Chave salva com segurança
-
-┌─────────────────────────────────────────┐
-│  Pronto! Aguardando análises...         │
-│  Mantenha esta janela aberta.           │
-└─────────────────────────────────────────┘
-
-|  Aguardando análises...    ← spinner ao vivo
-
-⚙️  Iniciando: Tela de login
-  /  Analisando: Tela de login  [00:23]   ← timer ao vivo
-
-  ✅ Concluído: Tela de login
-  ℹ  Tokens usados: 87,432
 ```
 
 ### Multi-provider LLM
 
 | Provider | Modelo | Limite | Uso |
 |----------|--------|--------|-----|
-| `cerebras` | gpt-oss-120b / zai-glm-4.7 | 1M tokens/dia grátis | **Padrão (agente E chat)** |
-| `groq` | llama-3.3-70b-versatile | 100K tokens/dia | Aposentado (agente incompatível com browser-use; chat migrado p/ Cerebras) |
+| `cerebras` | gpt-oss-120b / zai-glm-4.7 | 1M tokens/dia grátis | **Padrão (agente + chat + estimativas + resumos)** |
 | `deepseek` | deepseek-reasoner | pago | Opcional |
 | `ollama` | qualquer modelo local | ilimitado | Requer hardware |
 
@@ -237,62 +222,53 @@ Cole sua Cerebras API key (csk-...): csk-xxx
 
 ---
 
-## Role Dev — Funcionalidades
+## Fila por usuário (isolamento completo)
 
-### Chat — Comandos especiais
+- `AIReport.userId` — gravado ao clicar "Run AI QA" (req.user.id do JWT)
+- `DevTest.userId` — já existia
+- `GET /qa-jobs/pending` filtra por `userId: req.user.id` → worker só pega seus próprios jobs
+- Nunca mais um job de um usuário aparece no terminal de outro
 
-- `/teste-qa` — abre formulário inline (título, URL, **tipo de projeto** na 1ª vez, **re-mapear** se Wix Velo, projeto com autocomplete, descrição, critérios, comportamento, notas) → cria DevTest → execution panel com polling → resultado inline. Mostra indicadores de cache UI / páginas mapeadas ao escolher um projeto
-- `/prompt-qa` — exibe template de prompt para preencher com descrição da feature e enviar à IA, que gera todos os campos do `/teste-qa` prontos para copiar
-- Botão **"Instalar Agent"** no header (Chat e DevTests) — dropdown com comandos Windows/macOS + copiar
+## Visibilidade de tasks por assignee email
 
-### Página Testes (/dev-tests)
-- Dev vê seus próprios testes; QA/admin vê todos
-- Filtros por status (fila/executando/concluído/erro)
-- Relatório expansível por card
-- Auto-refresh quando há testes ativos
-- Botão "Novo teste" → vai para chat
-
-### Dashboard (Tasks)
-- Dev vê só suas próprias tasks (match por `assignee ≈ user.name`)
-- Cards não clicáveis (sem acesso à tela de review)
-- Filtro "Dev" oculto
-
-### Dashboard Stats
-- Dev vê "Visão Geral" + "Por Projeto" + "Meu Desempenho" (sem ver dados de outros)
-
-### Settings
-- Dev vê apenas a seção de Configuração de IA (Cerebras key + barra de tokens)
-- QA/admin vê tudo
+- `QATask.assigneeEmail` — capturado do Asana via webhook (`assignee.email` no opt_fields)
+- Dashboard.jsx: dev filtra por `assigneeEmail === user.email` (match exato)
+- Fallback por nome aproximado para tasks antigas sem email
 
 ---
 
 ## Página Projetos (/projects) — cache e configuração por projeto
 
-Cada projeto é um card com:
+Cada projeto card mostra:
 - **Badge de tipo:** Wix Velo (violeta) / Wix Headless (laranja) / Repositório (cinza)
-- **Seletor de tipo direto no card** — define/altera o tipo sem precisar abrir um teste (salva em `project_repo`)
-- **Badges:** Cache UI (verde) e Repo (azul, com nº de arquivos)
-- **Ícone de mapa** 🗺️ — agenda mapeamento/re-mapeamento (seta `pendingRemap`)
-  - ⚠️ Hoje o mapa só roda junto com um `/teste-qa` (ver backlog: virar job independente)
-- **Ver/Limpar cache UI**, **Remover repo**
-- Caminho do repo + data da análise, contadores
+- **Badge de mapa:** páginas mapeadas (ex: "23 págs.") — visível quando hasSitemap
+- **Badge de repo:** azul com nº de arquivos quando `hasRepoCache` (resumo QA gerado); cinza "aguardando análise" quando tem repo mas sem cache ainda
+- **Linha de detalhes:** "X páginas mapeadas · Y atrás", "Cache QA do repo atualizado Z atrás", caminho do repo
+- **Botão re-mapear (ícone 🗺️):** visível APENAS para projetos `wix_velo`
+- **Ações:** Ver/Limpar cache UI, Limpar cache repo (força re-análise completa), Remover repo
+- **Seletor de tipo** inline no card
+
+---
+
+## repo_cache — Resumo QA do Repositório
+
+Fluxo para projetos `repo` e `wix_headless`:
+1. **Primeira análise:** lê repo completo → Cerebras extrai JSON com: `projectType`, `mainRoutes`, `keyFeatures`, `authFlow`, `apiEndpoints`, `forms`, `businessRules`, `knownIssues`, `techStack`, `testingNotes` → salva como `repo_cache` no AIKnowledge
+2. **Análises seguintes:** `git diff lastCommit..HEAD` → Cerebras atualiza apenas o que mudou no cache
+3. **Agente recebe:** o resumo JSON (~2-3k chars), nunca o código bruto (~40k+ chars)
+4. **Limpar cache repo:** DELETE `/projects/:name/repo-cache` também limpa `lastCommit` para forçar re-leitura completa
 
 ---
 
 ## Frontend (src/)
 
 - **App.jsx** — rotas: `/login`, `/register`, `/`, `/dashboard`, `/settings`, `/chat`, `/dev-tests`, `/projects`, `/review/:id`
-- **AuthContext.jsx** — user, login, logout, `role`, `isDev`, `isQA`, `isAdmin`
-- **Sidebar.jsx** — itens filtrados por role; Testes + Projetos visíveis para todos
-- **Register.jsx** — seletor QA Analyst / Desenvolvedor
-- **Dashboard.jsx** — tasks, filtros, role-aware (dev: read-only, filtrado por `assignee ≈ user.name`)
-- **DashboardStats.jsx** — analytics; dev vê só "Meu Desempenho"
-- **Settings.jsx** — QA: tudo; Dev: só AIConfigSection
-- **QAReview.jsx** — checklist, screenshots, ações QA, card IA (queued/running/done/error + cancelar)
-- **Chat.jsx** — chat **Cerebras** + `/teste-qa` (form com tipo de projeto + execution panel) + `/prompt-qa`
-- **DevTests.jsx** — lista de DevTests com status, relatório, auto-refresh
-- **Projects.jsx** — cache/repo/sitemap por projeto, seletor de tipo, mapear
-- **AgentInstallButton.jsx** — dropdown de instalação Windows/macOS (componente compartilhado)
+- **AuthContext.jsx** — user (com email), login, logout, `role`, `isDev`, `isQA`, `isAdmin`
+- **Sidebar.jsx** — itens filtrados por role
+- **Dashboard.jsx** — dev filtra por `assigneeEmail === user.email` (match exato), fallback por nome para tasks antigas
+- **Chat.jsx** — `qaFlow` persiste no localStorage enquanto queued/running; ao voltar, retoma polling; poll imediato ao montar
+- **Projects.jsx** — badges sitemapPageCount + repoFileCount/repoCache; botão remap só para wix_velo; "Limpar cache repo"
+- **AgentInstallButton.jsx** — dropdown instalação Windows/macOS
 
 ---
 
@@ -301,24 +277,27 @@ Cada projeto é um card com:
 - **Render Free dorme:** após 15 min → ~30s para acordar. Worker mostra spinner "Conectando..."
 - **Prisma no Render:** `postinstall: prisma generate` + binaryTargets rhel no schema
 - **SDK do Asana:** dá `hasOwnProperty` errors → sempre usar `fetch` direto
-- **Stats:** sempre incluir `asanaId` no select — sem ele tudo colapsa em `byTask[undefined]`
-- **browser-use 0.12.9 rejeita `min_items`:** `_clean_schema()` remove campos inválidos do JSON Schema
+- **Stats:** sempre incluir `asanaId` no select
+- **browser-use 0.12.9 rejeita `min_items`:** `_clean_schema()` remove campos inválidos
 - **Cerebras 429:** fallback automático para `zai-glm-4.7`
-- **langchain-groq incompatível:** exige `groq<1.0.0` mas browser-use exige `groq==1.0.0` → removido do requirements.txt
-- **openai pinado:** `openai==2.16.0` porque browser-use 0.12.9 requer essa versão exata
-- **playwright não instala como .exe:** usar `python -m playwright install chromium` em vez de `playwright.exe`
-- **venv com conflitos:** installer sempre recria o venv (Remove-Item + venv) para garantir instalação limpa
-- **GitHub CDN cache:** após push, `irm` pode pegar versão cacheada por ~5 min. Usar `-Headers @{'Cache-Control'='no-cache'}` para forçar
-- **Desktop OneDrive:** `$env:USERPROFILE\Desktop` não existe → usar `[Environment]::GetFolderPath("Desktop")`
-- **DPAPI Windows-only:** session.py agora cross-platform (macOS Keychain, Linux chmod 600)
-- **Repo público obrigatório:** `raw.githubusercontent.com` exige autenticação para repos privados
-- **Chat global (bug corrigido):** ChatMessage não tinha `userId` → histórico era compartilhado. Corrigido: `userId` adicionado, mensagens antigas ficam com `userId='legacy'` e são invisíveis
-- **flash_mode obrigatório:** sem ele Groq/Cerebras omitem campos do tool call
-- **max_failures=1 agressivo:** page readiness timeout conta como falha → usar 3
-- **Browser isolado por teste (corrigido):** sem `user_data_dir` o Chromium persistia cookies entre testes/users → colega via sessão alheia. Agora cada teste usa `tempfile.mkdtemp()` apagado no final
-- **`hasRepo` ≠ existir registro project_repo:** o registro `project_repo` agora guarda também `projectType`/`pendingRemap`. `hasRepo` deve checar `repoPath` real, senão um Wix Velo aparece como "repo configurado"
-- **Crawler Wix = 0 tokens:** usa Playwright puro (não passa pelo browser-use/Cerebras). Segue links internos recursivamente respeitando .gitignore-like skip
-- **Fila NÃO é por usuário (BUG conhecido):** `GET /qa-jobs/pending` não filtra por userId → worker de um user pega job de outro, gasta a chave Cerebras errada. Ver backlog (plano já definido)
+- **langchain-groq incompatível:** removido do requirements.txt
+- **openai pinado:** `openai==2.16.0` (browser-use 0.12.9 exige essa versão)
+- **playwright:** usar `python -m playwright install chromium`
+- **venv com conflitos:** installer sempre recria o venv
+- **GitHub CDN cache:** após push pode demorar ~5 min. Usar `-Headers @{'Cache-Control'='no-cache'}`
+- **Desktop OneDrive:** usar `[Environment]::GetFolderPath("Desktop")`
+- **DPAPI Windows-only:** session.py cross-platform (macOS Keychain, Linux chmod 600)
+- **Repo público obrigatório:** raw.githubusercontent.com exige auth para repos privados
+- **Chat global (bug corrigido):** ChatMessage agora tem userId
+- **flash_mode obrigatório:** sem ele Cerebras omite campos do tool call
+- **Browser isolado por teste:** cada teste usa `tempfile.mkdtemp()` apagado no final
+- **`hasRepo` ≠ existir registro project_repo:** checar `repoPath` real, não apenas existência do registro
+- **Crawler Wix = 0 tokens:** Playwright puro, não passa pelo Cerebras
+- **LOCAL_VERSION em worker.py DEVE SEMPRE bater com version.txt:** se divergirem, auto-update fica em loop infinito
+- **browser-use limite 100k chars no task:** build_task() trunca code_context (40k) e site_map (30k); hard cap 95k
+- **max_failures=3:** com 1 o agente parava no primeiro tropeço (elemento não encontrado etc)
+- **qaFlow é estado React local:** sem localStorage, navegar e voltar ao chat perdía o estado do teste em andamento
+- **Estimativa de steps:** Cerebras estima via prompt curto (max_tokens=8); fallback = 8 + 5×critérios, máx 35. LOCAL_VERSION e version.txt devem sempre coincidir para evitar loop de auto-update
 
 ---
 
@@ -335,33 +314,29 @@ Cada projeto é um card com:
 - [x] Deploy backend no Render + frontend no Vercel — FEITO
 - [x] Role Dev (tasks read-only, /teste-qa, /prompt-qa, DevTests page) — FEITO
 - [x] Histórico do chat isolado por usuário — FEITO
-- [x] Cancelamento de análise em tempo real (watcher paralelo) — FEITO
-- [x] Settings filtrada por role — FEITO
-- [x] Chat migrado Groq → Cerebras (key do banco, fallback automático) — FEITO
-- [x] Browser isolado + descarte de credenciais por teste — FEITO
-- [x] Cache de UI por projeto (agente aprende e reusa) + console logs — FEITO
-- [x] Análise de repo local (full 1ª vez, git diff depois) — FEITO
+- [x] Cancelamento de análise em tempo real — FEITO
+- [x] Chat migrado Groq → Cerebras — FEITO
+- [x] Browser isolado + descarte de credenciais — FEITO
+- [x] Cache de UI por projeto (site_cache) — FEITO
+- [x] Análise de repo local (full 1ª vez, git diff depois) → **agora resume via Cerebras** — FEITO
 - [x] Crawler Wix Velo (mapeamento recursivo, 0 tokens) + tipos de projeto — FEITO
 - [x] Página Projetos (cache/repo/sitemap, seletor de tipo, mapear) — FEITO
-- [x] Botão de instalação do Agent (Win/Mac) no Chat e Testes — FEITO
-
-### 🔜 PRÓXIMA TAREFA AUTORIZADA (implementar agora) — Fila por usuário + filtro por assignee
-**Decisões fechadas com o usuário:**
-1. **Fila por usuário:** cada worker só pega jobs do próprio usuário logado
-   - `DevTest` já tem `userId` → filtrar `GET /qa-jobs/pending` por `req.user.id`
-   - `AIReport` **não tem `userId`** → adicionar campo (`prisma db push`) + setar no `POST /tasks/:id/run-ai-qa` (quem clicou "Executar análise")
-   - Filtrar AS DUAS filas por `req.user.id` no pending; validar dono no claim/result
-   - Efeito desejado: teste só roda na máquina de quem criou, com a chave dele
-2. **Visibilidade de task do dev = por ATRIBUIÇÃO (assignee), não menção**
-   - Dev só vê no Dashboard as tasks **atribuídas a ele** no Asana
-   - **Match por EMAIL:** o email do QA System é o mesmo do Asana → match automático, SEM campo extra nas configurações
-   - ⚠️ Hoje `QATask.assignee` é guardado como **nome** (texto). Para casar por email, ajustar o **webhook do Asana** para capturar também o **email/GID** do assignee
-   - Dashboard.jsx: trocar o match atual (`assignee ≈ user.name`) por match de email
+- [x] Botão de instalação do Agent (Win/Mac) — FEITO
+- [x] Fila por usuário (AIReport.userId + filtro no pending) — FEITO
+- [x] Visibilidade de tasks por assignee email — FEITO
+- [x] Contagem de páginas mapeadas nos cards de projeto — FEITO
+- [x] repo_cache — Cerebras resume repositório, agente recebe só o essencial — FEITO
+- [x] Estimativa inteligente de steps (Cerebras decide antes de cada teste) — FEITO
+- [x] Auto-update do worker (baixa só .py, reinicia sozinho) — FEITO
+- [x] Visibilidade do browser perguntada a cada sessão (sem salvar preferência) — FEITO
+- [x] Agente mais resiliente (max_failures 1→3) — FEITO
+- [x] Chat persiste qaFlow no localStorage — FEITO
+- [x] Analista pode dar dica ao agente quando trava (retry com contexto do progresso) — FEITO
 
 ### Backlog (aguardando autorização)
-- [ ] **(FILA)** Botão "Mapear" da página Projetos virar job independente tipo `wix_map`: hoje só seta `pendingRemap`, o mapa só roda junto com um `/teste-qa`. Worker pega na hora (sem teste), perguntando a URL ao clicar (projeto pode ter 0 testes = sem URL salva). Mexe em: projects.js, qaJobs.js, worker.py (crawler sem agente), Projects.jsx
-- [ ] Testar fluxo completo end-to-end (worker → job → Chromium → relatório)
-- [ ] Sistema de auto-update (worker verifica version.txt e baixa arquivos novos)
+- [ ] Botão "Mapear" da página Projetos virar job independente `wix_map` (hoje só seta pendingRemap)
+- [ ] Retry com dica: incluir contexto do progresso extraído do relatório anterior (parcialmente feito — função _extract_approved_from_report existe mas chamada ainda usa tuple antiga)
+- [ ] Testar fluxo completo end-to-end
 - [ ] Preencher base de conhecimento com projetos reais
 - [ ] Página de Conta (perfil do usuário, trocar senha)
 - [ ] Vision no agente (comparação visual)
