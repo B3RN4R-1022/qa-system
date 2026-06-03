@@ -1271,7 +1271,32 @@ async def token_valid(client, backend_url, jwt):
 
 # ─── Cerebras key ─────────────────────────────────────────────────────────────
 
+def _update_env_cerebras_key(new_key: str):
+    """Atualiza CEREBRAS_API_KEY no .env local se o arquivo existir."""
+    import re as _re
+    env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.env')
+    if not os.path.exists(env_path):
+        return
+    try:
+        with open(env_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+        new_content = _re.sub(
+            r'^CEREBRAS_API_KEY=.*$',
+            f'CEREBRAS_API_KEY={new_key}',
+            content, flags=_re.MULTILINE
+        )
+        with open(env_path, 'w', encoding='utf-8') as f:
+            f.write(new_content)
+    except Exception:
+        pass
+
+
 def ensure_cerebras_key(session_data):
+    # .env tem prioridade → basta editar o arquivo para trocar a chave
+    env_key = os.getenv("CEREBRAS_API_KEY", "").strip()
+    if env_key and env_key.startswith("csk-"):
+        return env_key
+
     key = session_data.get("cerebras_key")
     if key:
         return key
@@ -1288,7 +1313,8 @@ def ensure_cerebras_key(session_data):
 
     session_data["cerebras_key"] = key
     sess.save(session_data)
-    ok("Chave salva com segurança (criptografada nesta máquina).")
+    _update_env_cerebras_key(key)
+    ok("Chave salva com segurança (sessão criptografada + .env).")
     return key
 
 
@@ -1683,6 +1709,49 @@ async def run_job(client, backend_url, headers, job, cerebras_key):
     print()
 
 
+# ─── Menu de configurações ────────────────────────────────────────────────────
+
+def _startup_menu(session_data: dict) -> tuple[bool, bool]:
+    """
+    Exibe o menu de início com o status atual da sessão.
+    Retorna (trocar_usuario, trocar_cerebras).
+    """
+    email   = session_data.get("email", "")
+    has_jwt = bool(session_data.get("jwt"))
+
+    # Monta display da chave Cerebras (env tem prioridade)
+    key = os.getenv("CEREBRAS_API_KEY", "").strip() or session_data.get("cerebras_key", "")
+    if key and len(key) > 12:
+        key_display = f"{key[:8]}...{key[-4:]}"
+        key_source  = "(.env)" if os.getenv("CEREBRAS_API_KEY") else "(sessão)"
+    elif key:
+        key_display = "configurada"
+        key_source  = ""
+    else:
+        key_display = "não configurada"
+        key_source  = ""
+
+    print()
+    print("  ┌─────────────────────────────────────────┐")
+    if email and has_jwt:
+        user_line = f"  👤 {email}"
+        print(f"  │  {user_line:<43}│")
+    else:
+        print("  │  👤 Nenhuma sessão salva               │")
+    key_line = f"  🔑 Cerebras: {key_display} {key_source}".strip()
+    print(f"  │  {key_line:<43}│")
+    print("  └─────────────────────────────────────────┘")
+    print()
+    print("  [Enter]  Iniciar análises")
+    print("  [1]      Trocar usuário")
+    print("  [2]      Trocar chave Cerebras")
+    print()
+
+    choice = input("  > ").strip()
+    print()
+    return choice == "1", choice == "2"
+
+
 # ─── Loop principal ───────────────────────────────────────────────────────────
 
 async def main():
@@ -1698,6 +1767,33 @@ async def main():
         print()
 
         await check_update(client)
+
+        # ── Menu de configurações ─────────────────────────────────────────
+        trocar_usuario, trocar_cerebras = _startup_menu(session_data)
+
+        if trocar_usuario:
+            session_data.pop("jwt",   None)
+            session_data.pop("email", None)
+            sess.save(session_data)
+            ok("Sessão de usuário removida.")
+            print()
+
+        if trocar_cerebras:
+            session_data.pop("cerebras_key", None)
+            sess.save(session_data)
+            print()
+            info("Digite a nova chave Cerebras (csk-...):")
+            info("Crie uma chave gratuita em: https://cloud.cerebras.ai")
+            print()
+            new_key = input("  Nova Cerebras API key: ").strip()
+            while not new_key.startswith("csk-"):
+                err("Chave inválida — deve começar com 'csk-'")
+                new_key = input("  Nova Cerebras API key: ").strip()
+            session_data["cerebras_key"] = new_key
+            sess.save(session_data)
+            _update_env_cerebras_key(new_key)
+            ok("Nova chave salva (sessão + .env).")
+            print()
 
         # 1. Autenticação
         jwt = session_data.get("jwt")
