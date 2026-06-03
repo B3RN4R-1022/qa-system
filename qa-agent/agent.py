@@ -239,9 +239,9 @@ def build_llm(cerebras_api_key: str = None):
             'llama-3.1-8b':  'llama3.1-8b',
             'llama-3.1-70b': 'llama3.1-70b',
         }
-        model = os.getenv("CEREBRAS_MODEL", "llama3.3-70b")
+        model = os.getenv("CEREBRAS_MODEL", "llama3.1-8b")
         model = _CEREBRAS_ALIASES.get(model, model)   # corrige nome se vier errado
-        fallback_model = "llama3.1-8b" if model != "llama3.1-8b" else "llama3.3-70b"
+        fallback_model = "llama3.3-70b" if model != "llama3.3-70b" else "llama3.1-8b"
         print(f"[QA Agent] ⚡ Usando Cerebras — modelo: {model} | fallback: {fallback_model}")
         base_llm = ChatOpenAI(
             model=model,
