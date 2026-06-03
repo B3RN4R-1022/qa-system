@@ -292,7 +292,23 @@ def build_llm(cerebras_api_key: str = None):
         return BrowserUseLLM(base_llm, provider_override="groq"), model
 
 
+MAX_TASK_CHARS = 95_000   # browser-use hard limit é 100k; folga de 5k
+MAX_CODE_CHARS = 40_000   # máx para código-fonte no prompt
+MAX_MAP_CHARS  = 30_000   # máx para sitemap no prompt
+
+
 def build_task(title: str, preview_url: str, criteria: list, project_name: str, knowledge: str, skills: str, description: str = "", site_cache: str = None, code_context: str = None, site_map: str = None) -> str:
+    # Trunca seções variáveis grandes antes de montar o prompt
+    # para não estourar o limite de 100k chars do browser-use
+    _code = code_context
+    _map  = site_map
+    if _code and len(_code) > MAX_CODE_CHARS:
+        _code = _code[:MAX_CODE_CHARS] + "\n\n...[código truncado — contexto parcial, foque nos critérios de aceitação]"
+        print(f"[build_task] ⚠️  code_context truncado para {MAX_CODE_CHARS} chars")
+    if _map and len(_map) > MAX_MAP_CHARS:
+        _map = _map[:MAX_MAP_CHARS] + "\n\n...[mapa do site truncado — use as páginas listadas até aqui]"
+        print(f"[build_task] ⚠️  site_map truncado para {MAX_MAP_CHARS} chars")
+
     criteria_text = "\n".join(f"- {c}" for c in criteria) if criteria else "- Verificar funcionamento geral da funcionalidade"
 
     description_section = (
@@ -305,24 +321,24 @@ def build_task(title: str, preview_url: str, criteria: list, project_name: str, 
 
     # Seção de mapa Wix Velo — guia de navegação completo do site
     site_map_section = ""
-    if site_map:
+    if _map:
         site_map_section = f"""## MAPA DO SITE (use para navegar diretamente — não explore do zero)
 Este site foi mapeado previamente. Você já sabe quais páginas existem, quais formulários há em cada uma,
 quais botões estão disponíveis e como é a navegação. Use este mapa para ir direto ao ponto.
 
-{site_map}
+{_map}
 """
 
     # Seção de código-fonte — dá ao agente entendimento do que foi implementado
     code_section = ""
-    if code_context:
+    if _code:
         code_section = f"""## CÓDIGO-FONTE DO PROJETO (use para entender o que foi implementado)
 Este é o código real do projeto. Use-o para:
 - Entender exatamente o que a feature faz e como foi implementada
 - Saber onde procurar no browser (rotas, componentes, fluxos)
 - Ter precisão nos testes sem precisar explorar o site do zero
 
-{code_context}
+{_code}
 """
 
     # Seção de cache de site — se existir, a IA pula exploração já conhecida
@@ -339,7 +355,7 @@ Com base nisso:
 - Apenas verifique rapidamente se algo mudou nessas áreas já mapeadas
 """
 
-    return f"""Você é um analista de QA testando o sistema da Nocorp.
+    _prompt = f"""Você é um analista de QA testando o sistema da Nocorp.
 
 Acesse esta URL e realize os testes: {preview_url}
 
@@ -431,6 +447,12 @@ Após o relatório acima, adicione exatamente esta seção com o que você apren
   "notes": "qualquer informação útil para acelerar futuros testes neste projeto"
 }}
 🗃️ CACHE_UPDATE_END"""
+
+    # Hard cap de segurança — nunca ultrapassa o limite do browser-use
+    if len(_prompt) > MAX_TASK_CHARS:
+        print(f"[build_task] ⚠️  prompt ainda longo ({len(_prompt)} chars) — cortando no hard cap")
+        _prompt = _prompt[:MAX_TASK_CHARS]
+    return _prompt
 
 
 async def _attach_console_listeners(session, console_logs: list):
