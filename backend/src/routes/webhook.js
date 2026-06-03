@@ -67,6 +67,7 @@ router.post('/', async (req, res) => {
             description: task.notes || null,
             previewUrl: null,
             assignee: task.assignee?.name || null,
+            assigneeEmail: task.assignee?.email || null,
             status: 'rejected'
           }
         })
@@ -87,6 +88,7 @@ router.post('/', async (req, res) => {
           description: task.notes,
           title: task.name,
           assignee: task.assignee?.name || null,
+          assigneeEmail: task.assignee?.email || null,
           projectName
         },
         create: {
@@ -95,6 +97,7 @@ router.post('/', async (req, res) => {
           description: task.notes,
           previewUrl,
           assignee: task.assignee?.name || null,
+          assigneeEmail: task.assignee?.email || null,
           projectName,
           status: 'in_qa'
         }

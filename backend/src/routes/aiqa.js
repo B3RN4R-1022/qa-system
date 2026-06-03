@@ -37,11 +37,11 @@ router.post('/', async (req, res) => {
     })
   }
 
-  // Coloca o job na fila — status 'queued'
+  // Coloca o job na fila — status 'queued' com userId de quem clicou
   await prisma.aIReport.upsert({
     where: { taskId },
-    create: { taskId, status: 'queued' },
-    update: { status: 'queued', report: null, tokensUsed: null }
+    create: { taskId, status: 'queued', userId: req.user.id },
+    update: { status: 'queued', report: null, tokensUsed: null, userId: req.user.id }
   })
 
   res.json({

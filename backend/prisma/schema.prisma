@@ -15,7 +15,8 @@ model QATask {
   title       String
   description String?
   previewUrl  String?
-  assignee    String?
+  assignee      String?
+  assigneeEmail String?
   status             String   @default("pending")
   projectName        String?
   wasRejectedBefore  Boolean  @default(false)
@@ -62,6 +63,7 @@ model User {
   totpSecret  String?
   createdAt   DateTime   @default(now())
   devTests    DevTest[]
+  aiReports   AIReport[]
 }
 
 model DevTest {
@@ -92,6 +94,8 @@ model AIReport {
   id         String   @id @default(cuid())
   taskId     String   @unique
   sessionId  String?
+  userId     String?
+  user       User?    @relation(fields: [userId], references: [id])
   status     String   @default("pending") // 'pending' | 'running' | 'done' | 'error'
   report     String?
   tokensUsed Int?     // tokens consumidos nesta execução

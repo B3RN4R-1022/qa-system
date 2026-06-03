@@ -9,7 +9,7 @@ const storiesApi = new Asana.StoriesApi()
 
 async function getTask(taskId) {
   const response = await tasksApi.getTask(taskId, {
-    opt_fields: 'name,notes,assignee.name,start_on,custom_fields,custom_fields.name,custom_fields.display_value,custom_fields.type,custom_fields.enum_value,estimated_time,actual_time_minutes'
+    opt_fields: 'name,notes,assignee.name,assignee.email,start_on,custom_fields,custom_fields.name,custom_fields.display_value,custom_fields.type,custom_fields.enum_value,estimated_time,actual_time_minutes'
   })
   return response.data
 }

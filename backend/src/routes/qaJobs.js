@@ -12,10 +12,10 @@ const prisma = require('../lib/prisma')
 // GET /qa-jobs/pending — retorna o job mais antigo na fila (sem reivindicar)
 router.get('/pending', async (req, res) => {
   try {
-    // Verifica as duas filas em paralelo
+    // Verifica as duas filas em paralelo — filtra por userId para isolamento por usuário
     const [aiJob, devJob] = await Promise.all([
-      prisma.aIReport.findFirst({ where: { status: 'queued' }, orderBy: { updatedAt: 'asc' } }),
-      prisma.devTest.findFirst({ where: { status: 'queued' }, orderBy: { createdAt: 'asc' } }),
+      prisma.aIReport.findFirst({ where: { status: 'queued', userId: req.user.id }, orderBy: { updatedAt: 'asc' } }),
+      prisma.devTest.findFirst({ where: { status: 'queued', userId: req.user.id }, orderBy: { createdAt: 'asc' } }),
     ])
 
     if (!aiJob && !devJob) return res.json(null)

@@ -93,11 +93,19 @@ function Dashboard() {
 
   const tasksFiltradas = useMemo(() => {
     return tasks.filter(t => {
-      // Dev só vê as suas próprias tasks (match por assignee ≈ user.name)
-      if (isDev && user?.name) {
-        const assignee = (t.assignee || '').toLowerCase()
-        const uname = user.name.toLowerCase()
-        if (!assignee.includes(uname) && !uname.includes(assignee)) return false
+      // Dev só vê as suas próprias tasks
+      if (isDev) {
+        if (t.assigneeEmail) {
+          // Match exato por email (tasks novas com email capturado do Asana)
+          if (t.assigneeEmail !== user?.email) return false
+        } else if (user?.name) {
+          // Fallback por nome aproximado para tasks antigas sem email
+          const assignee = (t.assignee || '').toLowerCase()
+          const uname = user.name.toLowerCase()
+          if (!assignee.includes(uname) && !uname.includes(assignee)) return false
+        } else {
+          return false
+        }
       }
       if (filtroStatus !== 'all') {
         if (filtroStatus === 'rejected') {
