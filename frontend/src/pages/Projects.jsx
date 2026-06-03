@@ -17,12 +17,20 @@ function relativeDate(dateStr) {
   return new Date(dateStr).toLocaleDateString('pt-BR')
 }
 
-function CacheCard({ project, onClearCache, onClearRepo }) {
+const TYPE_LABEL = { wix_velo: 'Wix Velo', wix_headless: 'Wix Headless', repo: 'Repositório' }
+const TYPE_COLOR = {
+  wix_velo:    'bg-violet-50 dark:bg-violet-900/20 text-violet-700 dark:text-violet-400 border-violet-200 dark:border-violet-800',
+  wix_headless:'bg-orange-50 dark:bg-orange-900/20 text-orange-700 dark:text-orange-400 border-orange-200 dark:border-orange-800',
+  repo:        'bg-gray-50 dark:bg-gray-800 text-gray-600 dark:text-gray-400 border-gray-200 dark:border-gray-700',
+}
+
+function CacheCard({ project, onClearCache, onClearRepo, onRemap }) {
   const [expanded, setExpanded] = useState(false)
   const [cacheContent, setCacheContent] = useState(null)
   const [loadingCache, setLoadingCache] = useState(false)
   const [clearing, setClearing] = useState(false)
   const [clearingRepo, setClearingRepo] = useState(false)
+  const [remapping, setRemapping] = useState(false)
 
   async function loadCache() {
     if (cacheContent !== null) { setExpanded(e => !e); return }
@@ -55,6 +63,26 @@ function CacheCard({ project, onClearCache, onClearRepo }) {
     } finally {
       setClearing(false)
     }
+  }
+
+  async function requestRemap() {
+    if (!confirm(`Solicitar re-mapeamento completo para "${project.name}"?\nO worker vai re-mapear o site no próximo teste.`)) return
+    setRemapping(true)
+    try {
+      // Deleta mapa antigo + seta pendingRemap no projeto
+      await Promise.all([
+        fetch(`${API}/projects/${encodeURIComponent(project.name)}/sitemap`, {
+          method: 'DELETE', headers: { Authorization: `Bearer ${token()}` }
+        }),
+        fetch(`${API}/projects/${encodeURIComponent(project.name)}/repo`, {
+          method: 'PUT',
+          headers: { Authorization: `Bearer ${token()}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ pendingRemap: true })
+        })
+      ])
+      onRemap(project.name)
+    } catch { alert('Erro ao solicitar re-mapeamento') }
+    finally { setRemapping(false) }
   }
 
   async function clearRepo() {
@@ -106,6 +134,11 @@ function CacheCard({ project, onClearCache, onClearRepo }) {
 
         {/* Badges */}
         <div className="shrink-0 flex flex-col gap-1 items-end">
+          {project.projectType && (
+            <span className={`inline-flex items-center px-2 py-0.5 rounded-lg text-[10px] font-semibold border ${TYPE_COLOR[project.projectType] || TYPE_COLOR.repo}`}>
+              {TYPE_LABEL[project.projectType] || project.projectType}
+            </span>
+          )}
           {project.hasCache ? (
             <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-400 text-[10px] font-medium border border-emerald-200 dark:border-emerald-800">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="w-2.5 h-2.5"><path strokeLinecap="round" strokeLinejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
@@ -157,9 +190,18 @@ function CacheCard({ project, onClearCache, onClearRepo }) {
             </button>
           </>
         )}
+        {project.hasSitemap && (
+          <>
+            {(project.hasCache || project.hasRepo) && <span className="text-gray-200 dark:text-gray-700 text-xs">·</span>}
+            <button onClick={requestRemap} disabled={remapping}
+              className="text-xs text-blue-500 hover:text-blue-700 dark:hover:text-blue-300 transition-colors underline">
+              {remapping ? 'Agendando...' : '🔄 Re-mapear'}
+            </button>
+          </>
+        )}
         {project.hasRepo && (
           <>
-            {project.hasCache && <span className="text-gray-200 dark:text-gray-700 text-xs">·</span>}
+            {(project.hasCache || project.hasSitemap) && <span className="text-gray-200 dark:text-gray-700 text-xs">·</span>}
             <button onClick={clearRepo} disabled={clearingRepo}
               className="text-xs text-red-400 hover:text-red-600 dark:hover:text-red-300 transition-colors underline">
               {clearingRepo ? 'Removendo...' : 'Remover repo'}
@@ -244,6 +286,12 @@ export default function Projects() {
   function handleClearCache(projectName) {
     setProjects(prev => prev.map(p =>
       p.name === projectName ? { ...p, hasCache: false, cacheUpdatedAt: null } : p
+    ))
+  }
+
+  function handleRemap(projectName) {
+    setProjects(prev => prev.map(p =>
+      p.name === projectName ? { ...p, hasSitemap: false, sitemapPageCount: null, sitemapUpdatedAt: null } : p
     ))
   }
 
@@ -350,6 +398,7 @@ export default function Projects() {
                 project={project}
                 onClearCache={handleClearCache}
                 onClearRepo={handleClearRepo}
+                onRemap={handleRemap}
               />
             ))}
           </div>

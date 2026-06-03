@@ -101,13 +101,21 @@ const EMPTY_FORM = {
   title: '',
   previewUrl: '',
   projectName: '',
+  projectType: '',     // 'wix_velo' | 'wix_headless' | 'repo' | ''
+  requestRemap: false,
   description: '',
   expectedBehavior: '',
   criteria: [''],
   notes: '',
 }
 
-function TestForm({ form, onChange, onSubmit, onCancel, submitting, formError, existingProjects }) {
+const PROJECT_TYPES = [
+  { value: 'wix_velo',    label: 'Wix Velo',    desc: 'No-code, sem repositório' },
+  { value: 'wix_headless',label: 'Wix Headless', desc: 'Wix + repositório' },
+  { value: 'repo',        label: 'Repositório',  desc: 'Projeto com código' },
+]
+
+function TestForm({ form, onChange, onSubmit, onCancel, submitting, formError, existingProjects, projectConfig }) {
   function updateCriteria(idx, val) {
     const next = [...form.criteria]
     next[idx] = val
@@ -174,14 +182,68 @@ function TestForm({ form, onChange, onSubmit, onCancel, submitting, formError, e
                 <option key={p.name} value={p.name} />
               ))}
             </datalist>
-            {form.projectName && (existingProjects || []).some(p => p.name === form.projectName && p.hasCache) && (
-              <p className="text-[11px] text-emerald-600 dark:text-emerald-400 mt-0.5 flex items-center gap-1">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} className="w-3 h-3"><path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" /></svg>
-                Cache disponível — a IA vai usar o mapa deste site
-              </p>
+            {/* Indicadores de cache/mapa */}
+            {form.projectName && projectConfig && (
+              <div className="flex gap-2 mt-0.5 flex-wrap">
+                {projectConfig.hasCache && (
+                  <p className="text-[11px] text-emerald-600 dark:text-emerald-400 flex items-center gap-1">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} className="w-3 h-3"><path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" /></svg>
+                    Cache UI disponível
+                  </p>
+                )}
+                {projectConfig.hasSitemap && (
+                  <p className="text-[11px] text-blue-600 dark:text-blue-400 flex items-center gap-1">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} className="w-3 h-3"><path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" /></svg>
+                    {projectConfig.sitemapPageCount} páginas mapeadas
+                  </p>
+                )}
+              </div>
             )}
           </div>
         </div>
+
+        {/* Tipo de projeto — só aparece na primeira vez (sem tipo salvo) */}
+        {form.projectName && projectConfig && !projectConfig.projectType && (
+          <div>
+            <label className="text-xs font-medium text-gray-500 dark:text-gray-400 block mb-1.5">
+              Tipo de projeto <span className="text-red-400">*</span>
+              <span className="text-gray-400 font-normal ml-1">(salvo automaticamente para próximos testes)</span>
+            </label>
+            <div className="grid grid-cols-3 gap-1.5">
+              {PROJECT_TYPES.map(pt => (
+                <button
+                  key={pt.value}
+                  type="button"
+                  onClick={() => onChange('projectType', pt.value)}
+                  className={`text-left px-3 py-2 rounded-xl border text-xs transition-all ${
+                    form.projectType === pt.value
+                      ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-300'
+                      : 'border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-400 hover:border-blue-300'
+                  }`}
+                >
+                  <p className="font-semibold">{pt.label}</p>
+                  <p className="text-[10px] opacity-70 mt-0.5">{pt.desc}</p>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Re-mapear — só para Wix Velo com mapa existente */}
+        {form.projectName && projectConfig?.hasSitemap && (projectConfig.projectType === 'wix_velo' || form.projectType === 'wix_velo') && (
+          <label className="flex items-start gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={form.requestRemap}
+              onChange={e => onChange('requestRemap', e.target.checked)}
+              className="mt-0.5 accent-blue-500"
+            />
+            <span className="text-xs text-gray-600 dark:text-gray-400">
+              Solicitar re-mapeamento completo antes do teste
+              <span className="block text-[10px] text-gray-400 mt-0.5">Use se o site teve mudanças estruturais significativas</span>
+            </span>
+          </label>
+        )}
 
         {/* Descrição */}
         <div>
@@ -466,6 +528,7 @@ export default function Chat() {
   const [qaForm, setQaForm] = useState(EMPTY_FORM)
   const [qaFormError, setQaFormError] = useState(null)
   const [existingProjects, setExistingProjects] = useState([])
+  const [projectConfig, setProjectConfig] = useState(null)
 
   const bottomRef = useRef(null)
   const inputRef = useRef(null)
@@ -530,7 +593,7 @@ export default function Chat() {
       // Carrega projetos existentes para o seletor
       fetch(`${API}/projects`, { headers: { Authorization: `Bearer ${token}` } })
         .then(r => r.json())
-        .then(data => setExistingProjects(Array.isArray(data) ? data : []))
+        .then(data => { setExistingProjects(Array.isArray(data) ? data : []); setProjectConfig(null) })
         .catch(() => {})
       return
     }
@@ -579,6 +642,26 @@ export default function Chat() {
 
   function updateQaForm(field, value) {
     setQaForm(prev => ({ ...prev, [field]: value }))
+    // Quando o projeto muda, busca config dele
+    if (field === 'projectName') {
+      const match = existingProjects.find(p => p.name === value)
+      if (match) {
+        setProjectConfig({
+          projectType:       match.projectType || null,
+          hasCache:          match.hasCache,
+          hasSitemap:        match.hasSitemap,
+          sitemapPageCount:  match.sitemapPageCount,
+        })
+        // Auto-preenche o tipo se já estiver salvo
+        if (match.projectType) {
+          setQaForm(prev => ({ ...prev, projectName: value, projectType: match.projectType }))
+        }
+      } else if (value) {
+        setProjectConfig({ projectType: null, hasCache: false, hasSitemap: false })
+      } else {
+        setProjectConfig(null)
+      }
+    }
   }
 
   async function submitQaTest() {
@@ -605,11 +688,13 @@ export default function Chat() {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          title: qaForm.title.trim(),
+          title:        qaForm.title.trim(),
           description,
-          previewUrl: qaForm.previewUrl.trim(),
-          projectName: qaForm.projectName.trim() || undefined,
+          previewUrl:   qaForm.previewUrl.trim(),
+          projectName:  qaForm.projectName.trim() || undefined,
           criteria,
+          projectType:  qaForm.projectType || undefined,
+          requestRemap: qaForm.requestRemap || undefined,
         })
       })
       const data = await res.json()
@@ -787,6 +872,7 @@ export default function Chat() {
                     submitting={qaFlow.phase === 'submitting'}
                     formError={qaFormError}
                     existingProjects={existingProjects}
+                    projectConfig={projectConfig}
                   />
                 )}
                 {(qaFlow.phase === 'queued' || qaFlow.phase === 'running') && (

@@ -265,6 +265,234 @@ def analyze_repo_diff(repo_path, last_commit):
     return '\n'.join(lines), head, False
 
 
+# ─── Crawler Wix Velo ────────────────────────────────────────────────────────
+
+async def crawl_wix_site(base_url: str, headless: bool = True) -> tuple:
+    """
+    Crawler recursivo para sites Wix Velo.
+    Segue todos os links internos a partir da homepage.
+    Usa Playwright puro — zero tokens de IA.
+    Retorna: (site_map: dict, page_count: int, erro: str | None)
+    """
+    from playwright.async_api import async_playwright
+    from urllib.parse import urlparse, urljoin, urldefrag
+
+    parsed_base = urlparse(base_url)
+    base_domain = parsed_base.netloc
+
+    visited  = set()
+    queue    = [base_url]
+    pages    = {}
+    start_t  = time.time()
+
+    async with async_playwright() as pw:
+        browser = await pw.chromium.launch(headless=headless)
+        context = await browser.new_context(
+            viewport={'width': 1280, 'height': 800},
+            user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        )
+
+        try:
+            while queue:
+                raw_url = queue.pop(0)
+                clean_url, _ = urldefrag(raw_url)
+
+                # Normaliza e deduplica
+                if clean_url in visited:
+                    continue
+                # Só processa URLs do mesmo domínio
+                parsed = urlparse(clean_url)
+                if parsed.netloc and parsed.netloc != base_domain:
+                    continue
+
+                visited.add(clean_url)
+                path = parsed.path or '/'
+
+                elapsed = int(time.time() - start_t)
+                m, s = divmod(elapsed, 60)
+                _spin(0, f"Mapeando ({len(pages)+1}): {path}  [{m:02d}:{s:02d}]")
+
+                page = await context.new_page()
+                try:
+                    await page.goto(clean_url, wait_until='networkidle', timeout=25000)
+
+                    # Tenta fechar banners de cookie (comum em sites Wix)
+                    try:
+                        for sel in ['button:has-text("Aceitar")', 'button:has-text("Accept")',
+                                    '[data-testid="cookie-banner-accept"]']:
+                            btn = page.locator(sel).first
+                            if await btn.is_visible(timeout=1000):
+                                await btn.click()
+                                break
+                    except Exception:
+                        pass
+
+                    # Extrai dados da página via JavaScript
+                    data = await page.evaluate('''() => {
+                        const getText = el => el?.textContent?.trim() || '';
+                        const unique  = arr => [...new Set(arr.filter(Boolean))];
+
+                        // Título
+                        const title = document.title || getText(document.querySelector('h1'));
+
+                        // Headings
+                        const headings = [];
+                        document.querySelectorAll('h1,h2,h3').forEach(h => {
+                            const t = getText(h);
+                            if (t && t.length < 200) headings.push(h.tagName + ': ' + t);
+                        });
+
+                        // Navegação
+                        const navItems = [];
+                        document.querySelectorAll(
+                            'nav a, [role="navigation"] a, [aria-label*="nav" i] a, header a'
+                        ).forEach(a => {
+                            const t = getText(a);
+                            if (t && t.length < 60) navItems.push(t);
+                        });
+
+                        // Botões / CTAs
+                        const buttons = [];
+                        document.querySelectorAll(
+                            'button, [role="button"], a[class*="btn"], a[class*="button"]'
+                        ).forEach(b => {
+                            const t = getText(b);
+                            if (t && t.length < 80) buttons.push(t);
+                        });
+
+                        // Formulários
+                        const forms = [];
+                        document.querySelectorAll('form, [data-testid*="form"]').forEach(form => {
+                            const fields = [];
+                            form.querySelectorAll('input:not([type="hidden"]), textarea, select').forEach(inp => {
+                                const label =
+                                    inp.getAttribute('placeholder') ||
+                                    inp.getAttribute('aria-label') ||
+                                    getText(document.querySelector('label[for="' + inp.id + '"]')) ||
+                                    inp.getAttribute('name') || '';
+                                if (label) fields.push(label);
+                            });
+                            const submit = getText(form.querySelector('[type="submit"],button')) || 'Enviar';
+                            if (fields.length) forms.push({ fields: unique(fields), submit });
+                        });
+
+                        // Links internos
+                        const links = [];
+                        document.querySelectorAll('a[href]').forEach(a => {
+                            const href = a.getAttribute('href');
+                            if (href &&
+                                !href.startsWith('#') &&
+                                !href.startsWith('mailto:') &&
+                                !href.startsWith('tel:') &&
+                                !href.startsWith('javascript:')) {
+                                links.push(href);
+                            }
+                        });
+
+                        // Componentes Wix (detecta por atributos de data-testid/class)
+                        const wixMap = {
+                            'Wix Forms':       '[data-testid*="wix-form"], [class*="wixForms"]',
+                            'Wix Store':       '[data-testid*="store"], [class*="wixStore"]',
+                            'Wix Gallery':     '[data-testid*="gallery"], [class*="proGallery"]',
+                            'Wix Members':     '[data-testid*="members"], [class*="members"]',
+                            'Wix Bookings':    '[data-testid*="booking"]',
+                            'Wix Blog':        '[data-testid*="blog"]',
+                            'Wix Chat':        '[data-testid*="chat"]',
+                            'Wix Video':       '[data-testid*="video"]',
+                            'Lightbox/Modal':  '[data-testid*="lightbox"], [class*="lightBox"]',
+                        };
+                        const wixComponents = [];
+                        for (const [name, sel] of Object.entries(wixMap)) {
+                            if (document.querySelector(sel)) wixComponents.push(name);
+                        }
+
+                        return {
+                            title,
+                            headings: unique(headings).slice(0, 8),
+                            navItems: unique(navItems).slice(0, 20),
+                            buttons:  unique(buttons).slice(0, 20),
+                            forms,
+                            links,
+                            wixComponents,
+                        };
+                    }''')
+
+                    # Resolve e filtra links internos
+                    for href in data.get('links', []):
+                        abs_url  = urljoin(clean_url, href)
+                        abs_clean, _ = urldefrag(abs_url)
+                        pabs = urlparse(abs_clean)
+                        # Aceita URLs sem domínio (relativas) ou mesmo domínio
+                        if (not pabs.netloc or pabs.netloc == base_domain) and abs_clean not in visited:
+                            if abs_clean not in queue:
+                                queue.append(abs_clean)
+
+                    pages[path] = {
+                        'url':           clean_url,
+                        'title':         data.get('title', ''),
+                        'headings':      data.get('headings', []),
+                        'navigation':    data.get('navItems', []),
+                        'buttons':       data.get('buttons', []),
+                        'forms':         data.get('forms', []),
+                        'wixComponents': data.get('wixComponents', []),
+                    }
+
+                except Exception as e:
+                    pages[path] = {'url': clean_url, 'error': str(e)[:200]}
+                finally:
+                    await page.close()
+
+        finally:
+            await context.close()
+            await browser.close()
+
+    _clear_line()
+
+    site_map = {
+        'baseUrl':   base_url,
+        'pageCount': len(pages),
+        'mappedAt':  datetime.now(timezone.utc).isoformat(),
+        'pages':     pages,
+    }
+    return site_map, len(pages), None
+
+
+def format_site_map_for_agent(site_map: dict) -> str:
+    """
+    Converte o mapa JSON do site em texto legível para o prompt do agente.
+    """
+    if not site_map:
+        return ''
+
+    lines = [
+        f"### Mapa do Site (mapeado previamente — {site_map.get('pageCount', 0)} páginas)",
+        f"Site: {site_map.get('baseUrl', '')}",
+        "",
+    ]
+
+    for path, page in site_map.get('pages', {}).items():
+        if 'error' in page:
+            lines.append(f"\n#### {path} ⚠️ erro: {page['error']}")
+            continue
+
+        lines.append(f"\n#### {path}  —  {page.get('title', '')}")
+
+        if page.get('navigation'):
+            lines.append(f"  Navegação: {' | '.join(page['navigation'][:10])}")
+        if page.get('headings'):
+            lines.append(f"  Headings: {' · '.join(page['headings'][:5])}")
+        if page.get('forms'):
+            for f in page['forms']:
+                fields_str = ', '.join(f.get('fields', []))
+                lines.append(f"  Formulário: [{fields_str}] → [{f.get('submit', 'Enviar')}]")
+        if page.get('buttons'):
+            lines.append(f"  Botões/CTAs: {', '.join(page['buttons'][:10])}")
+        if page.get('wixComponents'):
+            lines.append(f"  Componentes Wix: {', '.join(page['wixComponents'])}")
+
+    return '\n'.join(lines)
+
+
 # ─── Repo: buscar / salvar no backend ────────────────────────────────────────
 
 async def _get_repo_meta(client, backend_url, headers, project_name):
@@ -288,6 +516,91 @@ async def _save_repo_meta(client, backend_url, headers, project_name, data: dict
         )
     except Exception:
         pass
+
+
+async def _get_wix_sitemap(client, backend_url, headers, project_name):
+    """Busca o mapa de site Wix salvo no backend."""
+    try:
+        r = await client.get(f"{backend_url}/projects/{project_name}/sitemap", headers=headers, timeout=10)
+        return r.json() if r.status_code == 200 else None
+    except Exception:
+        return None
+
+
+async def _save_wix_sitemap(client, backend_url, headers, project_name, site_map: dict):
+    """Salva o mapa de site Wix no backend."""
+    import json
+    try:
+        await client.put(
+            f"{backend_url}/projects/{project_name}/sitemap",
+            headers={**headers, 'Content-Type': 'application/json'},
+            content=json.dumps(site_map),
+            timeout=30
+        )
+    except Exception as e:
+        err(f"Erro ao salvar mapa do site: {e}")
+
+
+async def handle_wix_mapping(client, backend_url, headers, project_name, preview_url,
+                              has_sitemap: bool, pending_remap: bool, crawl_headless: bool):
+    """
+    Gerencia o mapeamento Wix Velo.
+    - Se há mapa e não foi pedido remap: retorna o mapa existente
+    - Se não há mapa: pergunta se quer mapear agora
+    - Se pending_remap=True: remapeia automaticamente
+    Retorna: (site_map: dict | None, headless_preference: bool)
+    """
+    # Remap pedido via formulário — remapeia sem perguntar
+    if pending_remap:
+        info("🔄 Re-mapeamento solicitado pelo usuário.")
+        await _save_repo_meta(client, backend_url, headers, project_name, {'pendingRemap': False})
+        site_map, count, e = await crawl_wix_site(preview_url, headless=crawl_headless)
+        if e:
+            err(f"Erro no mapeamento: {e}")
+            return None, crawl_headless
+        await _save_wix_sitemap(client, backend_url, headers, project_name, site_map)
+        ok(f"Re-mapeamento concluído — {count} páginas.")
+        return site_map, crawl_headless
+
+    # Mapa já existe e não há remap pendente — usa o existente
+    if has_sitemap:
+        existing = await _get_wix_sitemap(client, backend_url, headers, project_name)
+        if existing:
+            info(f"🗺️  Usando mapa existente ({existing.get('pageCount', '?')} páginas).")
+            return existing, crawl_headless
+
+    # Não há mapa — pergunta ao usuário
+    print()
+    info(f"Projeto '{project_name}' é Wix Velo e ainda não foi mapeado.")
+    info("O mapeamento lê todas as páginas do site para acelerar os testes futuros.")
+    print()
+
+    resp_map = input("  Mapear o site agora? [s/n]: ").strip().lower()
+    if resp_map != 's':
+        info("Mapeamento pulado. Será perguntado novamente na próxima sessão.")
+        return None, crawl_headless
+
+    # Pergunta preferência de visibilidade do browser (salva por projeto)
+    print()
+    resp_vis = input("  Deseja visualizar o browser durante o mapeamento? [s/n]: ").strip().lower()
+    headless = resp_vis != 's'
+
+    # Salva preferência
+    await _save_repo_meta(client, backend_url, headers, project_name, {'crawlHeadless': headless})
+
+    print()
+    info(f"Iniciando mapeamento {'em segundo plano' if headless else 'com browser visível'}...")
+    info("Aguarde — percorrendo todas as páginas do site...")
+    print()
+
+    site_map, count, e = await crawl_wix_site(preview_url, headless=headless)
+    if e:
+        err(f"Erro no mapeamento: {e}")
+        return None, headless
+
+    await _save_wix_sitemap(client, backend_url, headers, project_name, site_map)
+    ok(f"Mapeamento concluído — {count} páginas mapeadas.")
+    return site_map, headless
 
 
 async def ensure_repo_path(client, backend_url, headers, project_name):
@@ -554,14 +867,30 @@ async def run_job(client, backend_url, headers, job, cerebras_key):
         info(f"Critérios: {len(criterios)} item(s)")
     print()
 
-    # ── Análise de repositório ────────────────────────────────────────────
+    # ── Mapeamento Wix Velo (se aplicável) ───────────────────────────────
+    site_map_context = None
+    project_type  = job.get('project_type')
+    has_sitemap   = job.get('has_sitemap', False)
+    pending_remap = job.get('pending_remap', False)
+    crawl_headless = job.get('crawl_headless', True)
+
+    if project_name and project_type == 'wix_velo':
+        wix_map, _ = await handle_wix_mapping(
+            client, backend_url, headers,
+            project_name, job['preview_url'],
+            has_sitemap, pending_remap, crawl_headless
+        )
+        if wix_map:
+            site_map_context = format_site_map_for_agent(wix_map)
+
+    # ── Análise de repositório (Wix Headless ou Repo) ─────────────────────
     code_context = None
     new_head     = None
 
-    if project_name:
+    if project_name and project_type in ('wix_headless', 'repo', None):
         repo_path = await ensure_repo_path(client, backend_url, headers, project_name)
 
-        if repo_path:
+        if repo_path:  # noqa: E111
             repo_meta   = await _get_repo_meta(client, backend_url, headers, project_name)
             last_commit = repo_meta.get('lastCommit') if repo_meta else None
 
@@ -611,6 +940,7 @@ async def run_job(client, backend_url, headers, job, cerebras_key):
         cerebras_api_key=cerebras_key,
         site_cache=site_cache,
         code_context=code_context,
+        site_map=site_map_context,
     ))
     timer_task  = asyncio.create_task(_live_timer(job["title"]))
     cancel_task = asyncio.create_task(

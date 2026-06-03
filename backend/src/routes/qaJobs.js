@@ -50,26 +50,26 @@ router.get('/pending', async (req, res) => {
         return res.json(null)
       }
 
-      const [knowledge, skills, siteCache] = await Promise.all([
+      const [knowledge, skills, siteCache, projectRepo, wixSitemap] = await Promise.all([
         task.projectName
-          ? prisma.aIKnowledge.findUnique({
-              where: { type_name: { type: 'project', name: task.projectName } }
-            }).catch(() => null)
+          ? prisma.aIKnowledge.findUnique({ where: { type_name: { type: 'project', name: task.projectName } } }).catch(() => null)
           : Promise.resolve(null),
         prisma.aIKnowledge.findMany({ where: { type: 'skill' } }),
         task.projectName
-          ? prisma.aIKnowledge.findUnique({
-              where: { type_name: { type: 'site_cache', name: task.projectName } }
-            }).catch(() => null)
+          ? prisma.aIKnowledge.findUnique({ where: { type_name: { type: 'site_cache', name: task.projectName } } }).catch(() => null)
+          : Promise.resolve(null),
+        task.projectName
+          ? prisma.aIKnowledge.findUnique({ where: { type_name: { type: 'project_repo', name: task.projectName } } }).catch(() => null)
+          : Promise.resolve(null),
+        task.projectName
+          ? prisma.aIKnowledge.findUnique({ where: { type_name: { type: 'wix_sitemap', name: task.projectName } } }).catch(() => null)
           : Promise.resolve(null),
       ])
 
       const criteria = task.checks?.map(c => c.label) || []
       const knowledgeText = knowledge?.content || ''
-      const skillsText = skills
-        ?.filter(s => s.content?.trim())
-        .map(s => `### ${s.name}\n${s.content}`)
-        .join('\n\n') || ''
+      const skillsText = skills?.filter(s => s.content?.trim()).map(s => `### ${s.name}\n${s.content}`).join('\n\n') || ''
+      let repoConfig = {}; try { repoConfig = JSON.parse(projectRepo?.content || '{}') } catch {}
 
       return res.json({
         type: 'qa_task',
@@ -82,30 +82,34 @@ router.get('/pending', async (req, res) => {
         knowledge: knowledgeText,
         skills: skillsText,
         site_cache: siteCache?.content || null,
+        project_type: repoConfig.projectType || null,
+        has_sitemap: !!wixSitemap?.content,
+        pending_remap: repoConfig.pendingRemap || false,
+        crawl_headless: repoConfig.crawlHeadless !== false,
       })
     } else {
       // dev_test
       const criteria = winner.criteria ? JSON.parse(winner.criteria) : []
 
-      const [knowledge, skills, siteCache] = await Promise.all([
+      const [knowledge, skills, siteCache, projectRepo, wixSitemap] = await Promise.all([
         winner.projectName
-          ? prisma.aIKnowledge.findUnique({
-              where: { type_name: { type: 'project', name: winner.projectName } }
-            }).catch(() => null)
+          ? prisma.aIKnowledge.findUnique({ where: { type_name: { type: 'project', name: winner.projectName } } }).catch(() => null)
           : Promise.resolve(null),
         prisma.aIKnowledge.findMany({ where: { type: 'skill' } }),
         winner.projectName
-          ? prisma.aIKnowledge.findUnique({
-              where: { type_name: { type: 'site_cache', name: winner.projectName } }
-            }).catch(() => null)
+          ? prisma.aIKnowledge.findUnique({ where: { type_name: { type: 'site_cache', name: winner.projectName } } }).catch(() => null)
+          : Promise.resolve(null),
+        winner.projectName
+          ? prisma.aIKnowledge.findUnique({ where: { type_name: { type: 'project_repo', name: winner.projectName } } }).catch(() => null)
+          : Promise.resolve(null),
+        winner.projectName
+          ? prisma.aIKnowledge.findUnique({ where: { type_name: { type: 'wix_sitemap', name: winner.projectName } } }).catch(() => null)
           : Promise.resolve(null),
       ])
 
       const knowledgeText = knowledge?.content || ''
-      const skillsText = skills
-        ?.filter(s => s.content?.trim())
-        .map(s => `### ${s.name}\n${s.content}`)
-        .join('\n\n') || ''
+      const skillsText = skills?.filter(s => s.content?.trim()).map(s => `### ${s.name}\n${s.content}`).join('\n\n') || ''
+      let repoConfig = {}; try { repoConfig = JSON.parse(projectRepo?.content || '{}') } catch {}
 
       return res.json({
         type: 'dev_test',
@@ -118,6 +122,10 @@ router.get('/pending', async (req, res) => {
         knowledge: knowledgeText,
         skills: skillsText,
         site_cache: siteCache?.content || null,
+        project_type: repoConfig.projectType || null,
+        has_sitemap: !!wixSitemap?.content,
+        pending_remap: repoConfig.pendingRemap || false,
+        crawl_headless: repoConfig.crawlHeadless !== false,
       })
     }
   } catch (err) {

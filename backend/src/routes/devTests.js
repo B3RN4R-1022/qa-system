@@ -27,12 +27,15 @@ router.get('/', async (req, res) => {
 
 // POST /dev-tests — cria e enfileira novo teste
 router.post('/', async (req, res) => {
-  const { title, description, previewUrl, projectName, criteria } = req.body || {}
+  const { title, description, previewUrl, projectName, criteria, projectType, requestRemap } = req.body || {}
   if (!title || !description || !previewUrl) {
     return res.status(400).json({ error: 'Título, descrição e URL são obrigatórios' })
   }
   try {
-    const test = await prisma.devTest.create({
+    const ops = []
+
+    // Cria o teste
+    const testPromise = prisma.devTest.create({
       data: {
         userId: req.user.id,
         title: title.trim(),
@@ -45,6 +48,35 @@ router.post('/', async (req, res) => {
         status: 'queued',
       }
     })
+
+    // Se informou projectType ou requestRemap, salva/atualiza project_repo
+    const pName = projectName?.trim()
+    if (pName && (projectType || requestRemap)) {
+      ops.push(
+        (async () => {
+          const existing = await prisma.aIKnowledge.findUnique({
+            where: { type_name: { type: 'project_repo', name: pName } }
+          })
+          let current = {}
+          if (existing?.content) { try { current = JSON.parse(existing.content) } catch {} }
+
+          const updates = {}
+          if (projectType && !current.projectType) updates.projectType = projectType
+          if (requestRemap) updates.pendingRemap = true
+
+          if (Object.keys(updates).length > 0) {
+            const merged = { ...current, ...updates }
+            await prisma.aIKnowledge.upsert({
+              where: { type_name: { type: 'project_repo', name: pName } },
+              create: { type: 'project_repo', name: pName, content: JSON.stringify(merged) },
+              update: { content: JSON.stringify(merged) }
+            })
+          }
+        })()
+      )
+    }
+
+    const [test] = await Promise.all([testPromise, ...ops])
     res.json(test)
   } catch (err) {
     console.error('[dev-tests POST /]', err.message)

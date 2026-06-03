@@ -292,7 +292,7 @@ def build_llm(cerebras_api_key: str = None):
         return BrowserUseLLM(base_llm, provider_override="groq"), model
 
 
-def build_task(title: str, preview_url: str, criteria: list, project_name: str, knowledge: str, skills: str, description: str = "", site_cache: str = None, code_context: str = None) -> str:
+def build_task(title: str, preview_url: str, criteria: list, project_name: str, knowledge: str, skills: str, description: str = "", site_cache: str = None, code_context: str = None, site_map: str = None) -> str:
     criteria_text = "\n".join(f"- {c}" for c in criteria) if criteria else "- Verificar funcionamento geral da funcionalidade"
 
     description_section = (
@@ -302,6 +302,16 @@ def build_task(title: str, preview_url: str, criteria: list, project_name: str, 
 
     skills_section = f"## Instruções gerais de QA\n{skills}" if skills else ""
     knowledge_section = f"## Base de conhecimento do projeto {project_name}\n{knowledge}" if knowledge else ""
+
+    # Seção de mapa Wix Velo — guia de navegação completo do site
+    site_map_section = ""
+    if site_map:
+        site_map_section = f"""## MAPA DO SITE (use para navegar diretamente — não explore do zero)
+Este site foi mapeado previamente. Você já sabe quais páginas existem, quais formulários há em cada uma,
+quais botões estão disponíveis e como é a navegação. Use este mapa para ir direto ao ponto.
+
+{site_map}
+"""
 
     # Seção de código-fonte — dá ao agente entendimento do que foi implementado
     code_section = ""
@@ -345,6 +355,8 @@ Projeto: {project_name or 'Não informado'}
 {skills_section}
 
 {knowledge_section}
+
+{site_map_section}
 
 {code_section}
 
@@ -476,6 +488,7 @@ async def run_qa_agent(
     cerebras_api_key: str = None,
     site_cache: str = None,
     code_context: str = None,
+    site_map: str = None,
 ) -> dict:
     import tempfile, shutil
 
@@ -491,7 +504,7 @@ async def run_qa_agent(
         browser_profile=BrowserProfile(headless=headless, user_data_dir=temp_profile_dir)
     )
 
-    task_text = build_task(title, preview_url, criteria, project_name, knowledge, skills, description, site_cache=site_cache, code_context=code_context)
+    task_text = build_task(title, preview_url, criteria, project_name, knowledge, skills, description, site_cache=site_cache, code_context=code_context, site_map=site_map)
 
     # Imagens disponíveis para o agente fazer upload quando necessário
     import glob as _glob

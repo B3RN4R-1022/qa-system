@@ -5,7 +5,7 @@ const prisma = require('../lib/prisma')
 // GET /projects — lista todos os projetos conhecidos com stats de cache e repo
 router.get('/', async (req, res) => {
   try {
-    const [qaTasks, devTests, knowledgeProjects, caches, repoConfigs] = await Promise.all([
+    const [qaTasks, devTests, knowledgeProjects, caches, repoConfigs, sitemaps] = await Promise.all([
       prisma.qATask.findMany({
         select: { projectName: true, updatedAt: true },
         where: { projectName: { not: null } }
@@ -24,6 +24,10 @@ router.get('/', async (req, res) => {
       }),
       prisma.aIKnowledge.findMany({
         where: { type: 'project_repo' },
+        select: { name: true, content: true, updatedAt: true }
+      }),
+      prisma.aIKnowledge.findMany({
+        where: { type: 'wix_sitemap' },
         select: { name: true, content: true, updatedAt: true }
       })
     ])
@@ -51,19 +55,26 @@ router.get('/', async (req, res) => {
       if (t.projectName) countMap.set(t.projectName, (countMap.get(t.projectName) || 0) + 1)
     })
 
-    const cacheMap = new Map(caches.map(c => [c.name, c]))
-    const repoMap  = new Map(repoConfigs.map(r => {
+    const cacheMap   = new Map(caches.map(c => [c.name, c]))
+    const sitemapMap = new Map(sitemaps.map(s => {
+      let parsed = {}
+      try { parsed = JSON.parse(s.content) } catch {}
+      return [s.name, { pageCount: parsed.pageCount || 0, updatedAt: s.updatedAt }]
+    }))
+    const repoMap = new Map(repoConfigs.map(r => {
       let parsed = {}
       try { parsed = JSON.parse(r.content) } catch {}
       return [r.name, { ...parsed, updatedAt: r.updatedAt }]
     }))
 
     const projects = Array.from(projectMap.values()).map(p => {
-      const repo = repoMap.get(p.name)
+      const repo    = repoMap.get(p.name)
+      const sitemap = sitemapMap.get(p.name)
       return {
         name: p.name,
         testCount: countMap.get(p.name) || 0,
         lastActivity: p.lastActivity,
+        projectType: repo?.projectType || null,          // 'wix_velo'|'wix_headless'|'repo'
         hasCache: cacheMap.has(p.name),
         cacheUpdatedAt: cacheMap.get(p.name)?.updatedAt || null,
         hasRepo: !!repo,
@@ -71,6 +82,9 @@ router.get('/', async (req, res) => {
         repoAnalyzedAt: repo?.analyzedAt || null,
         repoFileCount: repo?.fileCount || null,
         repoLastCommit: repo?.lastCommit || null,
+        hasSitemap: sitemapMap.has(p.name),
+        sitemapPageCount: sitemap?.pageCount || null,
+        sitemapUpdatedAt: sitemap?.updatedAt || null,
       }
     })
 
@@ -85,6 +99,47 @@ router.get('/', async (req, res) => {
   } catch (err) {
     console.error('[Projects] Erro:', err)
     res.status(500).json({ error: 'Erro ao listar projetos' })
+  }
+})
+
+// GET /projects/:name/sitemap — retorna o mapa de site Wix Velo
+router.get('/:name/sitemap', async (req, res) => {
+  try {
+    const record = await prisma.aIKnowledge.findUnique({
+      where: { type_name: { type: 'wix_sitemap', name: req.params.name } }
+    })
+    if (!record) return res.json(null)
+    try { res.json(JSON.parse(record.content)) }
+    catch { res.json({ raw: record.content }) }
+  } catch (err) {
+    res.status(500).json({ error: 'Erro ao buscar mapa do site' })
+  }
+})
+
+// PUT /projects/:name/sitemap — salva o mapa de site (chamado pelo worker)
+router.put('/:name/sitemap', async (req, res) => {
+  try {
+    const content = typeof req.body === 'string' ? req.body : JSON.stringify(req.body)
+    await prisma.aIKnowledge.upsert({
+      where: { type_name: { type: 'wix_sitemap', name: req.params.name } },
+      create: { type: 'wix_sitemap', name: req.params.name, content },
+      update: { content }
+    })
+    res.json({ ok: true })
+  } catch (err) {
+    res.status(500).json({ error: 'Erro ao salvar mapa do site' })
+  }
+})
+
+// DELETE /projects/:name/sitemap — remove o mapa (força re-mapeamento)
+router.delete('/:name/sitemap', async (req, res) => {
+  try {
+    await prisma.aIKnowledge.deleteMany({
+      where: { type: 'wix_sitemap', name: req.params.name }
+    })
+    res.json({ ok: true })
+  } catch (err) {
+    res.status(500).json({ error: 'Erro ao remover mapa do site' })
   }
 })
 
