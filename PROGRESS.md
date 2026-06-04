@@ -186,10 +186,10 @@ Frontend polling /ai-report ou /dev-tests/:id a cada 4s → exibe relatório
 
 | Arquivo | Descrição |
 |---------|-----------|
-| `worker.py` | **v1.4.3.** Login terminal, spinner/timer, loop de jobs, watcher de cancelamento. Auto-update (baixa só .py ao iniciar, reinicia sozinho). Menu de configurações ao iniciar (trocar usuário, trocar chave Cerebras). `estimate_steps_for_test()` (Cerebras estima steps por teste, teto 50). `summarize_repo_for_qa()` + `update_repo_cache_with_diff()`. **Checkpoints por critério:** `_run_single_criterion()`, `_compile_final_report()`, `_criterion_passed()`, `_extract_criterion_detail()`. `_ask_analyst_hint()` com retry só no critério que falhou. `load_dotenv` com caminho absoluto + `override=True`. |
+| `worker.py` | **v1.4.6.** Login terminal, spinner/timer, loop de jobs, watcher de cancelamento. Auto-update (baixa só .py ao iniciar, reinicia sozinho). Menu de configurações ao iniciar (trocar usuário, trocar chave Cerebras). `estimate_steps_for_test()` (Cerebras estima steps por teste, teto 50). `summarize_repo_for_qa()` + `update_repo_cache_with_diff()`. **Checkpoints por critério:** `_run_single_criterion()` (gerencia sessão externamente — browser fica aberto durante prompts). `_compile_final_report()`, `_criterion_passed()`, `_extract_criterion_detail()`. Prompt de dica: texto=retry, `/end`=encerra teste. Prompt de steps esgotados: número=continua, `/end`=encerra. `_live_timer()` com `pause_event` para parar spinner durante prompts. `_fix_env_model_now()` corrige `CEREBRAS_MODEL` desatualizado no `.env` ao iniciar. `_patch_env_model_on_update()` corrige no `.env` após auto-update. `load_dotenv` com caminho absoluto + `override=True`. |
 | `session.py` | Cross-platform: Windows=DPAPI, macOS=Keychain, Linux=chmod 600. |
-| `agent.py` | browser-use wrapper. `max_failures=3`, `max_actions_per_step=5`. Prompt com PASSO 2/3 genérico (não mais hardcoded para cadastro). Orçamento de steps com referência a "5 ações/step". Truncagem de `code_context` (40k) e `site_map` (30k). Modelo `gpt-oss-120b` (3000 tok/s, free tier). |
-| `version.txt` | Versão atual (`1.4.3`). **LOCAL_VERSION em worker.py SEMPRE deve bater com este arquivo.** |
+| `agent.py` | browser-use wrapper. `max_failures=3`, `max_actions_per_step=5`. Prompt com PASSO 2/3 genérico. Truncagem de `code_context` (40k) e `site_map` (30k). Modelo `gpt-oss-120b` (3000 tok/s, free tier). **`_external_session`**: reutiliza sessão existente sem fechar browser. **`_no_initial_navigate`**: pula navegação inicial em retries. **`step_extension_callback`**: loop interno de steps — o agente pede mais steps ao analista sem fechar browser, continua de onde parou no mesmo Agent. **`timing.log`**: log separado com tempo LLM vs tempo browser por step + resumo por teste. Guard `_UNAVAILABLE`: força `gpt-oss-120b` se `.env` tiver modelo fora do free tier. |
+| `version.txt` | Versão atual (`1.4.6`). **LOCAL_VERSION em worker.py SEMPRE deve bater com este arquivo.** |
 | `install.ps1` | Windows: `irm .../install.ps1 \| iex`. Necessário só na primeira instalação. |
 | `install.sh` | macOS: `curl -fsSL .../install.sh \| bash`. |
 
@@ -296,6 +296,11 @@ Fluxo para projetos `repo` e `wix_headless`:
 - **Crawler Wix = 0 tokens:** Playwright puro, não passa pelo Cerebras
 - **LOCAL_VERSION em worker.py DEVE SEMPRE bater com version.txt:** se divergirem, auto-update fica em loop infinito
 - **browser-use limite 100k chars no task:** build_task() trunca code_context (40k) e site_map (30k); hard cap 95k
+- **Chrome aviso "extensions-on-chrome-urls":** banner cosmético do Playwright ao lançar Chromium — comportamento normal, ignorar
+- **`.env` com modelo antigo sobrevive ao auto-update:** `_fix_env_model_now()` corrige ao iniciar; `_patch_env_model_on_update()` corrige após update
+- **LLM é stateless:** toda informação precisa ir no request — não existe "memória" externa sem enviar pelo request. Fine-tuning ensina comportamento, não fatos específicos do projeto
+- **"Lost in the middle":** modelos ignoram informação no meio de contextos longos — encher o prompt de código não garante que o agente vai usar
+- **Contexto cresce por step:** mensagem 1 (task+DOM) vai em todos os steps. Step 10 = task + 9×(ação+DOM) ≈ 50-75k tokens. Principal causa de lentidão progressiva
 - **max_failures=3:** com 1 o agente parava no primeiro tropeço (elemento não encontrado etc)
 - **qaFlow é estado React local:** sem localStorage, navegar e voltar ao chat perdía o estado do teste em andamento
 - **Estimativa de steps:** Cerebras estima via prompt curto (max_tokens=16); fallback = 10 + 5×critérios, máx 50
@@ -346,6 +351,16 @@ Fluxo para projetos `repo` e `wix_headless`:
 - [x] **Prompt PASSO 2/3 genérico** — não mais hardcoded para cadastro — FEITO
 - [x] **load_dotenv caminho absoluto + override=True** — .env sempre prevalece sobre vars do sistema — FEITO
 - [x] **Modelo gpt-oss-120b** — único disponível no free tier Cerebras, 3000 tok/s — FEITO
+- [x] **v1.4.4 — timing.log separado** — `[TIMING] Step N | LLM: Xs | Browser: Ys` por step + resumo final com % LLM vs % browser — FEITO
+- [x] **v1.4.4 — fix automático de modelo no .env** — `_fix_env_model_now()` ao iniciar + `_patch_env_model_on_update()` após auto-update corrigem `llama3.1-8b` etc → `gpt-oss-120b` automaticamente — FEITO
+- [x] **v1.4.4 — guard de modelo em agent.py** — `_UNAVAILABLE` força `gpt-oss-120b` mesmo se `.env` antigo chegou ao `build_llm` — FEITO
+- [x] **v1.4.5 — comando /end no prompt de dica** — `/end` fecha browser e encerra teste (compila resultado parcial); Enter=continua; texto=dica+retry — FEITO
+- [x] **v1.4.6 — browser permanece aberto em falha e steps esgotados** — FEITO
+  - Critério falhou → browser aberto → pede dica (`texto`=retry, `/end`=encerra)
+  - Steps esgotados → browser aberto → pede mais steps (`número`=continua no mesmo Agent, `/end`=encerra)
+  - `_run_single_criterion` gerencia sessão externamente (cria/fecha o browser); retries reutilizam browser já aberto (sem re-login, estado preservado)
+  - `_external_session` + `_no_initial_navigate` + `step_extension_callback` em `run_qa_agent`
+  - Loop interno de steps: mesmo Agent, mesmo browser, sem re-navegar
 
 ### Backlog (aguardando autorização)
 - [ ] Botão "Mapear" da página Projetos virar job independente `wix_map` (hoje só seta pendingRemap)
@@ -354,3 +369,10 @@ Fluxo para projetos `repo` e `wix_headless`:
 - [ ] Página de Conta (perfil do usuário, trocar senha)
 - [ ] Vision no agente (comparação visual)
 - [ ] Heartbeat do worker → auto-reset de testes presos após timeout (hoje: manual via botão Parar)
+- [ ] **ProjectToolCall — knowledge chunked por feature** (pipeline completo)
+  - Nova tabela: `projectName + topic + title + description + content + source`
+  - Pipeline automático para repos: regex (rotas/modelos) + Cerebras → chunks por feature
+  - Descoberta Wix: agente cria chunks durante testes (`source: wix_discovery`)
+  - Fallback: agente não acha → explora → cria novo chunk
+  - Agente recebe só lista de títulos; pede chunk quando precisar (tool calling real)
+  - Objetivo: reduzir contexto de 40k tokens → 2k base + chunks sob demanda
