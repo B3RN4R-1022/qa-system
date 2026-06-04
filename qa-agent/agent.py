@@ -217,14 +217,10 @@ class BrowserUseLLM:
         self._tokens_total += total
         self._step         += 1
 
-        limit_day = 1_000_000  # Cerebras free tier
-        pct = (self._tokens_total / limit_day * 100) if limit_day else 0
-
         print(
             f"[Tokens] Step {self._step:>2} | "
             f"step: {total:>6} (in:{inp} out:{out}) | "
-            f"total: {self._tokens_total:>7} | "
-            f"limite diário: {pct:.1f}% usado"
+            f"total: {self._tokens_total:>7}"
         )
 
     async def ainvoke(self, messages, output_format=None, **kwargs):
@@ -356,7 +352,7 @@ def build_llm(llm_key: str = None):
         api_key = llm_key or os.getenv("ANTHROPIC_API_KEY")
         if not api_key:
             raise ValueError("ANTHROPIC_API_KEY não configurada no .env do qa-agent")
-        model = os.getenv("CLAUDE_MODEL", "claude-haiku-4-5-20251001")
+        model = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-6")
         print(f"[QA Agent] ⚡ Usando Claude (Anthropic) — modelo: {model}")
         base_llm = ChatAnthropic(model=model, api_key=api_key, temperature=0.1)
         return BrowserUseLLM(base_llm, provider_override="anthropic"), model
@@ -733,7 +729,6 @@ async def run_qa_agent(
             f"[Tokens]    Tokens entrada   : {llm._tokens_in:,}\n"
             f"[Tokens]    Tokens saída     : {llm._tokens_out:,}\n"
             f"[Tokens]    TOTAL            : {llm._tokens_total:,}\n"
-            f"[Tokens]    Limite diário    : {llm._tokens_total / 1_000_000 * 100:.2f}% de 1.000.000\n"
             f"[Tokens] ══════════════════════════════\n"
         )
         print(_token_summary)
@@ -791,6 +786,8 @@ async def run_qa_agent(
                 "report":       "Teste encerrado pelo analista (/end após steps esgotados).",
                 "steps":        len(history.history) if hasattr(history, 'history') else 0,
                 "tokens_total": llm._tokens_total,
+                "tokens_input": llm._tokens_in,
+                "tokens_output": llm._tokens_out,
                 "cache_update": None,
                 "end_requested": True,
             }
