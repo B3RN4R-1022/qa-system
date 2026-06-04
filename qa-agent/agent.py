@@ -172,6 +172,13 @@ class BrowserUseLLM:
     3. Retorna _CompletionWrapper com .completion
     """
 
+    # ── Contador de custo ao vivo (módulo-global, atualizado a cada step) ───
+    # Worker lê via get_live_cost_brl() para exibir no spinner
+    _live_cost_brl: float = 0.0
+    _PRICE_IN_PER_M  = 3.00   # Claude Sonnet 4.6 $/1M input
+    _PRICE_OUT_PER_M = 15.00  # Claude Sonnet 4.6 $/1M output
+    _USD_BRL         = 5.75
+
     def __init__(self, llm, provider_override=None, fallback_llm=None):
         self._llm = llm
         self._fallback_llm = fallback_llm
@@ -217,10 +224,16 @@ class BrowserUseLLM:
         self._tokens_total += total
         self._step         += 1
 
+        # Atualiza custo ao vivo (lido pelo worker para exibir no spinner)
+        usd = (self._tokens_in * BrowserUseLLM._PRICE_IN_PER_M +
+               self._tokens_out * BrowserUseLLM._PRICE_OUT_PER_M) / 1_000_000
+        BrowserUseLLM._live_cost_brl = usd * BrowserUseLLM._USD_BRL
+
         print(
             f"[Tokens] Step {self._step:>2} | "
             f"step: {total:>6} (in:{inp} out:{out}) | "
-            f"total: {self._tokens_total:>7}"
+            f"total: {self._tokens_total:>7} | "
+            f"custo: R$ {BrowserUseLLM._live_cost_brl:.4f}"
         )
 
     async def ainvoke(self, messages, output_format=None, **kwargs):
@@ -321,6 +334,16 @@ class BrowserUseLLM:
             object.__setattr__(self, name, value)
         else:
             object.__setattr__(self, name, value)
+
+
+def get_live_cost_brl() -> float:
+    """Retorna o custo acumulado do teste atual em BRL. Lido pelo worker para o spinner."""
+    return BrowserUseLLM._live_cost_brl
+
+
+def reset_live_cost():
+    """Zera o contador antes de cada novo teste."""
+    BrowserUseLLM._live_cost_brl = 0.0
 
 
 def build_llm(llm_key: str = None):
@@ -643,6 +666,7 @@ async def run_qa_agent(
     print(_timing_header)
     _write_timing(_timing_header)
 
+    reset_live_cost()
     llm, model_name = build_llm(llm_key=llm_key)
 
     # Sessão do browser — cria uma nova ou reutiliza uma externa (para retries sem fechar o browser)

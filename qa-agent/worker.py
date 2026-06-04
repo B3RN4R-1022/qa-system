@@ -26,14 +26,14 @@ import httpx
 from dotenv import load_dotenv
 
 import session as sess
-from agent import run_qa_agent
+from agent import run_qa_agent, get_live_cost_brl
 
 # Carrega o .env do mesmo diretório do worker.py, independente do cwd
 # override=True garante que o .env prevalece sobre vars de sistema/sessão anterior
 import pathlib as _pathlib
 load_dotenv(_pathlib.Path(__file__).parent / '.env', override=True)
 
-LOCAL_VERSION = "1.4.16"
+LOCAL_VERSION = "1.4.17"
 
 # ─── Precificação (Claude Sonnet 4.6) ────────────────────────────────────────
 _PRICE_IN_PER_M  = 3.00   # USD por 1M tokens de entrada
@@ -1715,7 +1715,9 @@ async def _live_timer(title, pause_event: asyncio.Event = None):
             if pause_event is None or not pause_event.is_set():
                 elapsed = int(time.time() - start)
                 m, s = divmod(elapsed, 60)
-                _spin(spin, f"Analisando: {short}  [{m:02d}:{s:02d}]")
+                cost = get_live_cost_brl()
+                cost_str = f"  {_fmt_brl(cost)}" if cost > 0 else ""
+                _spin(spin, f"Analisando: {short}  [{m:02d}:{s:02d}]{cost_str}")
                 spin += 1
             await asyncio.sleep(0.3)
     except asyncio.CancelledError:
