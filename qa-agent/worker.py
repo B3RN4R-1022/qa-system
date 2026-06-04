@@ -33,25 +33,8 @@ from agent import run_qa_agent
 import pathlib as _pathlib
 load_dotenv(_pathlib.Path(__file__).parent / '.env', override=True)
 
-LOCAL_VERSION = "1.4.14"
+LOCAL_VERSION = "1.4.15"
 
-# Corrige CEREBRAS_MODEL imediatamente se .env tiver modelo desatualizado.
-# Garante que mesmo sem auto-update o modelo certo é usado na sessão atual.
-def _fix_env_model_now():
-    import re as _r
-    _UNAVAIL = {'llama3.1-8b','llama3.3-70b','llama-3.3-70b','llama-3.1-8b','llama3.1-70b','llama-3.1-70b'}
-    try:
-        p = _pathlib.Path(__file__).parent / '.env'
-        if not p.exists():
-            return
-        txt = p.read_text(encoding='utf-8', errors='ignore')
-        m = _r.search(r'^CEREBRAS_MODEL=(.+)$', txt, _r.MULTILINE)
-        if m and m.group(1).strip().strip('"').strip("'") in _UNAVAIL:
-            p.write_text(_r.sub(r'^CEREBRAS_MODEL=.*$', 'CEREBRAS_MODEL=gpt-oss-120b', txt, flags=_r.MULTILINE), encoding='utf-8')
-            os.environ['CEREBRAS_MODEL'] = 'gpt-oss-120b'
-    except Exception:
-        pass
-_fix_env_model_now()
 DEFAULT_BACKEND = os.getenv("BACKEND_URL", "https://qa-system-5vpf.onrender.com").rstrip("/")
 RAW_BASE    = "https://raw.githubusercontent.com/B3RN4R-1022/qa-system/master/qa-agent"
 VERSION_URL = f"{RAW_BASE}/version.txt"
@@ -518,69 +501,66 @@ def format_site_map_for_agent(site_map: dict) -> str:
     return '\n'.join(lines)
 
 
-# ─── Sumário QA do repositório via Cerebras ──────────────────────────────────
+# ─── Chamada direta ao LLM (sem browser-use) — para análise de repo, estimativa de steps, etc.
 
-CEREBRAS_URL   = "https://api.cerebras.ai/v1/chat/completions"
-SAMBANOVA_URL  = "https://api.sambanova.ai/v1/chat/completions"
-CEREBRAS_MODEL = "gpt-oss-120b"                    # 3000 tok/s, gratuito no plano free Cerebras
-SAMBANOVA_MODEL = "Meta-Llama-3.3-70B-Instruct"   # grátis com $5 de crédito, sem fila de 60s
+ANTHROPIC_URL = "https://api.anthropic.com/v1/messages"
+OPENAI_URL    = "https://api.openai.com/v1/chat/completions"
+CLAUDE_MODEL  = "claude-haiku-4-5-20251001"
+OPENAI_MODEL  = "gpt-4o-mini"
 
 
 async def _llm_call(llm_key: str, prompt: str, max_tokens: int = 2048) -> str | None:
     """
-    Chama o LLM configurado (Cerebras ou SambaNova) para tarefas de análise
-    — sem browser-use, direto via HTTP OpenAI-compatible.
+    Chama o LLM configurado (Claude ou OpenAI) para tarefas de análise
+    — sem browser-use, direto via HTTP.
     """
-    provider = os.getenv("AI_PROVIDER", "groq").lower().strip()
-
-    if provider == "sambanova":
-        url   = SAMBANOVA_URL
-        model = os.getenv("SAMBANOVA_MODEL", SAMBANOVA_MODEL)
-        fallback = None  # mesmo modelo no fallback para SambaNova
-    else:
-        # Cerebras (padrão para análise mesmo se provider for groq/deepseek/ollama)
-        url   = CEREBRAS_URL
-        model = CEREBRAS_MODEL
-        fallback = "zai-glm-4.7"
+    provider = os.getenv("AI_PROVIDER", "claude").lower().strip()
 
     async with httpx.AsyncClient(timeout=120) as c:
         try:
-            r = await c.post(
-                url,
-                headers={"Authorization": f"Bearer {llm_key}", "Content-Type": "application/json"},
-                json={
-                    "model": model,
-                    "messages": [{"role": "user", "content": prompt}],
-                    "temperature": 0.1,
-                    "max_tokens": max_tokens,
-                }
-            )
-            data = r.json()
-            if r.status_code == 429 and fallback:
-                r2 = await c.post(
-                    url,
+            if provider == "openai":
+                r = await c.post(
+                    OPENAI_URL,
                     headers={"Authorization": f"Bearer {llm_key}", "Content-Type": "application/json"},
                     json={
-                        "model": fallback,
+                        "model": os.getenv("OPENAI_MODEL", OPENAI_MODEL),
                         "messages": [{"role": "user", "content": prompt}],
                         "temperature": 0.1,
                         "max_tokens": max_tokens,
                     }
                 )
-                data = r2.json()
-            return data.get("choices", [{}])[0].get("message", {}).get("content", "").strip() or None
+                data = r.json()
+                return data.get("choices", [{}])[0].get("message", {}).get("content", "").strip() or None
+
+            else:  # claude (padrão)
+                r = await c.post(
+                    ANTHROPIC_URL,
+                    headers={
+                        "x-api-key": llm_key,
+                        "anthropic-version": "2023-06-01",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "model": os.getenv("CLAUDE_MODEL", CLAUDE_MODEL),
+                        "max_tokens": max_tokens,
+                        "messages": [{"role": "user", "content": prompt}],
+                    }
+                )
+                data = r.json()
+                content = data.get("content", [])
+                return content[0].get("text", "").strip() if content else None
+
         except Exception as e:
             err(f"Erro na chamada LLM ({provider}): {e}")
             return None
 
 
-# Mantém alias para compatibilidade com código existente
-_cerebras_call = _llm_call
+_cerebras_call = _llm_call  # alias para compatibilidade
 
 
-async def summarize_repo_for_qa(raw_code: str, project_name: str, cerebras_key: str) -> str | None:
+async def summarize_repo_for_qa(raw_code: str, project_name: str, llm_key: str) -> str | None:
     """
-    Usa Cerebras para extrair apenas o essencial do repositório para QA.
+    Usa o LLM para extrair apenas o essencial do repositório para QA.
     Retorna um JSON com rotas, features, auth, endpoints, regras de negócio.
     Esse resumo é salvo em cache — NÃO o código bruto.
     """
@@ -605,14 +585,14 @@ Responda com um JSON válido (sem markdown, sem explicações) com esta estrutur
 Código do repositório '{project_name}':
 {raw_code[:38000]}"""
 
-    info("🤖 Cerebras analisando repositório — extraindo dados essenciais para QA...")
-    result = await _cerebras_call(cerebras_key, prompt, max_tokens=2048)
+    info("🤖 LLM analisando repositório — extraindo dados essenciais para QA...")
+    result = await _llm_call(llm_key, prompt, max_tokens=2048)
     return result
 
 
 async def update_repo_cache_with_diff(
     existing_cache: str, diff_context: str,
-    project_name: str, cerebras_key: str
+    project_name: str, llm_key: str
 ) -> str | None:
     """
     Atualiza o cache QA do repositório com base no git diff mais recente.
@@ -627,8 +607,8 @@ Abaixo estão as mudanças recentes no código (git diff):
 Atualize o JSON com base nas mudanças. Mantenha todos os campos que não foram afetados.
 Responda APENAS com o JSON atualizado, sem markdown ou explicações."""
 
-    info("🤖 Cerebras atualizando cache com as mudanças do repositório...")
-    result = await _cerebras_call(cerebras_key, prompt, max_tokens=2048)
+    info("🤖 LLM atualizando cache com as mudanças do repositório...")
+    result = await _llm_call(llm_key, prompt, max_tokens=2048)
     return result
 
 
@@ -639,10 +619,10 @@ async def estimate_steps_for_test(
     has_cache: bool,
     has_repo_cache: bool,
     has_site_map: bool,
-    cerebras_key: str,
+    llm_key: str,
 ) -> int:
     """
-    Pede ao Cerebras para estimar quantos steps o browser-use vai precisar
+    Pede ao LLM para estimar quantos steps o browser-use vai precisar
     para executar este teste com base nos critérios e na descrição real da feature.
     Retorna um inteiro entre 6 e 25.
     """
@@ -672,14 +652,14 @@ Critérios: {criteria_str}
 
 Responda só com o número (entre 10 e 50):"""
 
-    result = await _cerebras_call(cerebras_key, prompt, max_tokens=16)
+    result = await _llm_call(llm_key, prompt, max_tokens=16)
 
     if result:
         match = _re.search(r'\b(\d+)\b', result.strip())
         if match:
             n = int(match.group(1))
             estimated = max(10, min(n, 50))
-            info(f"🎯 Cerebras estimou {n} steps → usando {estimated}")
+            info(f"🎯 LLM estimou {n} steps → usando {estimated}")
             return estimated
         info(f"⚠️  Resposta inesperada da estimativa: '{result.strip()[:40]}' — usando fallback")
     else:
@@ -793,7 +773,7 @@ async def _save_tool_call(client, backend_url, headers, project_name,
         err(f"Erro ao salvar tool call '{topic}': {e}")
 
 
-async def generate_tool_calls_from_repo(raw_code: str, project_name: str, cerebras_key: str) -> list:
+async def generate_tool_calls_from_repo(raw_code: str, project_name: str, llm_key: str) -> list:
     """
     Gera tool calls a partir do código-fonte do repositório.
     Divide em blocos por arquivo, filtra os relevantes (têm rotas/funções/classes)
@@ -861,7 +841,7 @@ Estrutura de cada item:
 Arquivos:
 {files_text}"""
 
-        result = await _cerebras_call(cerebras_key, prompt, max_tokens=1200)
+        result = await _llm_call(llm_key, prompt, max_tokens=1200)
 
         if result:
             try:
@@ -1277,7 +1257,7 @@ def _compile_final_report(criterion_results: list) -> tuple[str, bool, str | Non
 
 
 async def _run_single_criterion(
-    job, cerebras_key,
+    job, llm_key,
     criterion, criterion_idx, all_criteria,
     site_cache, repo_cache_context, site_map_context,
     test_headless, max_steps,
@@ -1339,7 +1319,7 @@ async def _run_single_criterion(
             knowledge=job.get('knowledge', ''),
             skills=job.get('skills', ''),
             headless=test_headless,
-            cerebras_api_key=cerebras_key,
+            llm_key=llm_key,
             site_cache=site_cache,
             code_context=repo_cache_context,
             site_map=site_map_context,
@@ -1540,8 +1520,6 @@ async def check_update(client):
         print(f"  ⚠️  {len(failed)} arquivo(s) não puderam ser baixados.")
         print("     Rode o instalador manualmente se o problema persistir.")
     else:
-        # Corrige o modelo no .env se estava desatualizado (ex: llama3.1-8b de versões antigas)
-        _patch_env_model_on_update(script_dir)
         ok(f"Atualização concluída — versão {remote} instalada.")
         print()
         print("  ↩  Reiniciando o agente para aplicar as mudanças...")
@@ -1626,7 +1604,7 @@ async def token_valid(client, backend_url, jwt):
         return False
 
 
-# ─── Cerebras key ─────────────────────────────────────────────────────────────
+# ─── Gerenciamento de chave do provider LLM ───────────────────────────────────
 
 def _update_env_provider(provider: str):
     """Atualiza ou insere AI_PROVIDER no .env local."""
@@ -1649,28 +1627,8 @@ def _update_env_provider(provider: str):
         pass
 
 
-def _update_env_cerebras_key(new_key: str):
-    """Atualiza CEREBRAS_API_KEY no .env local se o arquivo existir."""
-    import re as _re
-    env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.env')
-    if not os.path.exists(env_path):
-        return
-    try:
-        with open(env_path, 'r', encoding='utf-8') as f:
-            content = f.read()
-        new_content = _re.sub(
-            r'^CEREBRAS_API_KEY=.*$',
-            f'CEREBRAS_API_KEY={new_key}',
-            content, flags=_re.MULTILINE
-        )
-        with open(env_path, 'w', encoding='utf-8') as f:
-            f.write(new_content)
-    except Exception:
-        pass
-
-
-def _update_env_sambanova_key(new_key: str):
-    """Salva SAMBANOVA_API_KEY no .env local (insere se não existir)."""
+def _update_env_api_key(key_name: str, value: str):
+    """Salva/atualiza uma variável de API key no .env local."""
     import re as _re
     env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.env')
     try:
@@ -1678,109 +1636,60 @@ def _update_env_sambanova_key(new_key: str):
         if os.path.exists(env_path):
             with open(env_path, 'r', encoding='utf-8') as f:
                 content = f.read()
-        if 'SAMBANOVA_API_KEY=' in content:
-            content = _re.sub(r'^SAMBANOVA_API_KEY=.*$', f'SAMBANOVA_API_KEY={new_key}',
+        if f'{key_name}=' in content:
+            content = _re.sub(rf'^{key_name}=.*$', f'{key_name}={value}',
                                content, flags=_re.MULTILINE)
         else:
-            content += f'\nSAMBANOVA_API_KEY={new_key}\n'
+            content += f'\n{key_name}={value}\n'
         with open(env_path, 'w', encoding='utf-8') as f:
             f.write(content)
-        os.environ['SAMBANOVA_API_KEY'] = new_key  # atualiza sessão atual também
+        os.environ[key_name] = value
     except Exception:
         pass
 
 
-def ensure_sambanova_key(session_data):
-    """Garante que a SAMBANOVA_API_KEY está disponível. Pede ao usuário se necessário."""
-    env_key = os.getenv("SAMBANOVA_API_KEY", "").strip()
-    if env_key:
-        return env_key
+def ensure_llm_key(session_data) -> str:
+    """Garante que a API key do provider configurado está disponível."""
+    provider = os.getenv("AI_PROVIDER", "claude").lower().strip()
 
-    key = session_data.get("sambanova_key")
-    if key:
+    if provider == "openai":
+        env_key = os.getenv("OPENAI_API_KEY", "").strip()
+        if env_key:
+            return env_key
+        key = session_data.get("openai_key", "")
+        if key:
+            return key
+        print()
+        info("Cole sua OpenAI API key (sk-...):")
+        key = input("  > ").strip()
+        while not key.startswith("sk-"):
+            err("Chave inválida — deve começar com 'sk-'")
+            key = input("  > ").strip()
+        session_data["openai_key"] = key
+        sess.save(session_data)
+        _update_env_api_key("OPENAI_API_KEY", key)
+        ok("Chave OpenAI salva.")
         return key
 
-    print()
-    info("Você precisa de uma API key da SambaNova (gratuita, sem cartão).")
-    info("Crie a sua em: https://cloud.sambanova.ai  → API → Generate API Key")
-    print()
-    key = input("  Cole sua SambaNova API key: ").strip()
-
-    while not key:
-        err("Chave inválida — não pode ser vazia")
-        key = input("  Cole sua SambaNova API key: ").strip()
-
-    session_data["sambanova_key"] = key
-    sess.save(session_data)
-    _update_env_sambanova_key(key)
-    ok("Chave SambaNova salva (sessão + .env).")
-    return key
-
-
-def _patch_env_model_on_update(script_dir: str = None):
-    """
-    Corrige CEREBRAS_MODEL no .env quando o valor atual não está disponível no free tier.
-    Chamado após auto-update e também na inicialização, para cobrir .envs antigos.
-    Modelos removidos do free tier: llama3.1-8b, llama3.3-70b e variações.
-    """
-    import re as _re
-    _dir = script_dir or os.path.dirname(os.path.abspath(__file__))
-    env_path = os.path.join(_dir, '.env')
-    if not os.path.exists(env_path):
-        return
-    _UNAVAILABLE = {
-        'llama3.1-8b', 'llama3.3-70b',
-        'llama-3.3-70b', 'llama-3.1-8b',
-        'llama3.1-70b', 'llama-3.1-70b',
-    }
-    try:
-        with open(env_path, 'r', encoding='utf-8') as f:
-            content = f.read()
-        m = _re.search(r'^CEREBRAS_MODEL=(.+)$', content, _re.MULTILINE)
-        if not m:
-            return  # variável não está no .env — o padrão do código já é gpt-oss-120b
-        current_model = m.group(1).strip().strip('"').strip("'")
-        if current_model not in _UNAVAILABLE:
-            return  # modelo OK
-        new_content = _re.sub(
-            r'^CEREBRAS_MODEL=.*$',
-            'CEREBRAS_MODEL=gpt-oss-120b',
-            content, flags=_re.MULTILINE
-        )
-        with open(env_path, 'w', encoding='utf-8') as f:
-            f.write(new_content)
-        print(f"  ✅ .env corrigido: CEREBRAS_MODEL {current_model} → gpt-oss-120b")
-        # Atualiza variável de ambiente da sessão atual também
-        os.environ['CEREBRAS_MODEL'] = 'gpt-oss-120b'
-    except Exception:
-        pass
-
-
-def ensure_cerebras_key(session_data):
-    # .env tem prioridade → basta editar o arquivo para trocar a chave
-    env_key = os.getenv("CEREBRAS_API_KEY", "").strip()
-    if env_key and env_key.startswith("csk-"):
-        return env_key
-
-    key = session_data.get("cerebras_key")
-    if key:
+    else:  # claude (padrão)
+        env_key = os.getenv("ANTHROPIC_API_KEY", "").strip()
+        if env_key:
+            return env_key
+        key = session_data.get("anthropic_key", "")
+        if key:
+            return key
+        print()
+        info("Cole sua Anthropic API key (sk-ant-...):")
+        info("Crie em: https://console.anthropic.com → API Keys")
+        key = input("  > ").strip()
+        while not key.startswith("sk-ant-"):
+            err("Chave inválida — deve começar com 'sk-ant-'")
+            key = input("  > ").strip()
+        session_data["anthropic_key"] = key
+        sess.save(session_data)
+        _update_env_api_key("ANTHROPIC_API_KEY", key)
+        ok("Chave Claude salva.")
         return key
-
-    print()
-    info("Você precisa de uma API key gratuita da Cerebras.")
-    info("Crie a sua em: https://cloud.cerebras.ai")
-    print()
-    key = input("  Cole sua Cerebras API key (csk-...): ").strip()
-
-    while not key.startswith("csk-"):
-        err("Chave inválida — deve começar com 'csk-'")
-        key = input("  Cole sua Cerebras API key (csk-...): ").strip()
-
-    session_data["cerebras_key"] = key
-    sess.save(session_data)
-    _update_env_cerebras_key(key)
-    ok("Chave salva com segurança (sessão criptografada + .env).")
-    return key
 
 
 # ─── Timer ao vivo durante execução ───────────────────────────────────────────
@@ -1844,7 +1753,7 @@ async def _watch_cancellation(client, backend_url, headers, task_id, job_type):
 
 # ─── Execução de um job ───────────────────────────────────────────────────────
 
-async def run_job(client, backend_url, headers, job, cerebras_key):
+async def run_job(client, backend_url, headers, job, llm_key):
     task_id       = job["task_id"]
     job_type      = job.get("type", "qa_task")
     project_name  = job.get("project_name", "")
@@ -1915,7 +1824,7 @@ async def run_job(client, backend_url, headers, job, cerebras_key):
                 elif raw_code:
                     file_count = raw_code.count('\n#### ')
                     print()
-                    summary = await summarize_repo_for_qa(raw_code, project_name, cerebras_key)
+                    summary = await summarize_repo_for_qa(raw_code, project_name, llm_key)
                     if summary:
                         await _save_repo_cache(client, backend_url, headers, project_name, summary)
                         await _save_repo_meta(client, backend_url, headers, project_name, {
@@ -1936,7 +1845,7 @@ async def run_job(client, backend_url, headers, job, cerebras_key):
                 elif diff_context:
                     print()
                     updated = await update_repo_cache_with_diff(
-                        repo_cache_context, diff_context, project_name, cerebras_key
+                        repo_cache_context, diff_context, project_name, llm_key
                     )
                     if updated:
                         await _save_repo_cache(client, backend_url, headers, project_name, updated)
@@ -1966,7 +1875,7 @@ async def run_job(client, backend_url, headers, job, cerebras_key):
             # Primeira vez com repo: gera tool calls automaticamente
             info("🔧 Gerando knowledge base do projeto a partir do repositório...")
             print()
-            tc_list = await generate_tool_calls_from_repo(raw_code, project_name, cerebras_key)
+            tc_list = await generate_tool_calls_from_repo(raw_code, project_name, llm_key)
             if tc_list:
                 for tc in tc_list:
                     await _save_tool_call(
@@ -1992,7 +1901,7 @@ async def run_job(client, backend_url, headers, job, cerebras_key):
         has_cache=bool(site_cache),
         has_repo_cache=bool(repo_cache_context),
         has_site_map=bool(site_map_context),
-        cerebras_key=cerebras_key,
+        llm_key=llm_key,
     )
     print()
 
@@ -2020,7 +1929,7 @@ async def run_job(client, backend_url, headers, job, cerebras_key):
 
             cr = await _run_single_criterion(
                 job=job,
-                cerebras_key=cerebras_key,
+                llm_key=llm_key,
                 criterion=criterion,
                 criterion_idx=i,
                 all_criteria=criterios,
@@ -2095,7 +2004,7 @@ async def run_job(client, backend_url, headers, job, cerebras_key):
             knowledge=job.get("knowledge", ""),
             skills=job.get("skills", ""),
             headless=test_headless,
-            cerebras_api_key=cerebras_key,
+            llm_key=llm_key,
             site_cache=site_cache,
             code_context=repo_cache_context,
             site_map=site_map_context,
@@ -2171,7 +2080,7 @@ async def run_job(client, backend_url, headers, job, cerebras_key):
                     knowledge=job.get("knowledge", ""),
                     skills=job.get("skills", ""),
                     headless=test_headless,
-                    cerebras_api_key=cerebras_key,
+                    llm_key=llm_key,
                     site_cache=site_cache,
                     code_context=repo_cache_context,
                     site_map=site_map_context,
@@ -2230,29 +2139,25 @@ async def run_job(client, backend_url, headers, job, cerebras_key):
 def _startup_menu(session_data: dict) -> tuple[bool, bool]:
     """
     Exibe o menu de início com o status atual da sessão.
-    Retorna (trocar_usuario, trocar_llm_key).
+    Retorna (trocar_usuario, trocar_chave_ia).
     """
     email    = session_data.get("email", "")
     has_jwt  = bool(session_data.get("jwt"))
-    provider = os.getenv("AI_PROVIDER", "groq").lower().strip()
+    provider = os.getenv("AI_PROVIDER", "claude").lower().strip()
 
-    # Monta display da chave LLM de acordo com o provider configurado
-    if provider == "sambanova":
-        key = os.getenv("SAMBANOVA_API_KEY", "").strip() or session_data.get("sambanova_key", "")
-        provider_label = "SambaNova"
+    if provider == "openai":
+        key = os.getenv("OPENAI_API_KEY", "").strip() or session_data.get("openai_key", "")
+        provider_label = "OpenAI"
     else:
-        key = os.getenv("CEREBRAS_API_KEY", "").strip() or session_data.get("cerebras_key", "")
-        provider_label = "Cerebras"
+        key = os.getenv("ANTHROPIC_API_KEY", "").strip() or session_data.get("anthropic_key", "")
+        provider_label = "Claude"
 
     if key and len(key) > 12:
         key_display = f"{key[:8]}...{key[-4:]}"
-        key_source  = "(.env)" if (os.getenv("SAMBANOVA_API_KEY") if provider == "sambanova" else os.getenv("CEREBRAS_API_KEY")) else "(sessão)"
     elif key:
         key_display = "configurada"
-        key_source  = ""
     else:
         key_display = "não configurada"
-        key_source  = ""
 
     print()
     print("  ┌─────────────────────────────────────────┐")
@@ -2261,7 +2166,7 @@ def _startup_menu(session_data: dict) -> tuple[bool, bool]:
         print(f"  │  {user_line:<43}│")
     else:
         print("  │  👤 Nenhuma sessão salva               │")
-    key_line = f"  🔑 {provider_label}: {key_display} {key_source}".strip()
+    key_line = f"  🔑 {provider_label}: {key_display}"
     print(f"  │  {key_line:<43}│")
     prov_line = f"  🤖 Provider: {provider}"
     print(f"  │  {prov_line:<43}│")
@@ -2269,7 +2174,7 @@ def _startup_menu(session_data: dict) -> tuple[bool, bool]:
     print()
     print("  [Enter]  Iniciar análises")
     print("  [1]      Trocar usuário")
-    print(f"  [2]      Trocar chave {provider_label}")
+    print(f"  [2]      Trocar provider / chave IA")
     print()
 
     choice = input("  > ").strip()
@@ -2294,7 +2199,7 @@ async def main():
         await check_update(client)
 
         # ── Menu de configurações ─────────────────────────────────────────
-        trocar_usuario, trocar_cerebras = _startup_menu(session_data)
+        trocar_usuario, trocar_ia = _startup_menu(session_data)
 
         if trocar_usuario:
             session_data.pop("jwt",   None)
@@ -2303,47 +2208,42 @@ async def main():
             ok("Sessão de usuário removida.")
             print()
 
-        if trocar_cerebras:
-            # Pergunta qual provider antes de pedir a chave
+        if trocar_ia:
             print()
             print("  Escolha o provider de IA:")
-            print("  [1]  Cerebras  — grátis, 1M tokens/dia (pode ter fila de 60s)")
-            print("  [2]  SambaNova — grátis com $5 de crédito, sem fila")
+            print("  [1]  Claude (Anthropic) — sk-ant-...  (recomendado)")
+            print("  [2]  OpenAI / GPT        — sk-...")
             print()
             prov_choice = input("  Provider [1/2]: ").strip()
             print()
 
             if prov_choice == "2":
-                # SambaNova
-                session_data.pop("sambanova_key", None)
+                session_data.pop("openai_key", None)
                 sess.save(session_data)
-                info("Crie ou consulte sua chave em: https://cloud.sambanova.ai → API")
-                print()
-                new_key = input("  SambaNova API key: ").strip()
-                while not new_key:
-                    err("Chave inválida — não pode ser vazia")
-                    new_key = input("  SambaNova API key: ").strip()
-                session_data["sambanova_key"] = new_key
+                info("Crie em: https://platform.openai.com → API keys")
+                new_key = input("  OpenAI API key (sk-...): ").strip()
+                while not new_key.startswith("sk-"):
+                    err("Chave inválida — deve começar com 'sk-'")
+                    new_key = input("  OpenAI API key (sk-...): ").strip()
+                session_data["openai_key"] = new_key
                 sess.save(session_data)
-                _update_env_sambanova_key(new_key)
-                _update_env_provider("sambanova")
-                ok("SambaNova configurada e salva (.env).")
+                _update_env_api_key("OPENAI_API_KEY", new_key)
+                _update_env_provider("openai")
+                ok("OpenAI configurada e salva (.env).")
                 print()
             else:
-                # Cerebras (padrão)
-                session_data.pop("cerebras_key", None)
+                session_data.pop("anthropic_key", None)
                 sess.save(session_data)
-                info("Crie uma chave gratuita em: https://cloud.cerebras.ai")
-                print()
-                new_key = input("  Cerebras API key (csk-...): ").strip()
-                while not new_key.startswith("csk-"):
-                    err("Chave inválida — deve começar com 'csk-'")
-                    new_key = input("  Cerebras API key (csk-...): ").strip()
-                session_data["cerebras_key"] = new_key
+                info("Crie em: https://console.anthropic.com → API Keys")
+                new_key = input("  Anthropic API key (sk-ant-...): ").strip()
+                while not new_key.startswith("sk-ant-"):
+                    err("Chave inválida — deve começar com 'sk-ant-'")
+                    new_key = input("  Anthropic API key (sk-ant-...): ").strip()
+                session_data["anthropic_key"] = new_key
                 sess.save(session_data)
-                _update_env_cerebras_key(new_key)
-                _update_env_provider("cerebras")
-                ok("Cerebras configurada e salva (.env).")
+                _update_env_api_key("ANTHROPIC_API_KEY", new_key)
+                _update_env_provider("claude")
+                ok("Claude configurado e salvo (.env).")
                 print()
 
         # 1. Autenticação
@@ -2369,15 +2269,10 @@ async def main():
             ok(f"Login realizado — {user['email']}")
             info("Sessão válida por 30 dias.")
 
-        # 2. Chave do provider LLM — usa o provider configurado no .env (AI_PROVIDER)
-        # O menu [2] acima já permite trocar o provider e a chave de forma interativa.
-        _active_provider = os.getenv("AI_PROVIDER", "groq").lower().strip()
-        if _active_provider == "sambanova":
-            cerebras_key = ensure_sambanova_key(session_data)
-            ok("SambaNova configurada.")
-        else:
-            cerebras_key = ensure_cerebras_key(session_data)
-            ok("Cerebras configurada.")
+        # 2. Chave do provider LLM
+        _active_provider = os.getenv("AI_PROVIDER", "claude").lower().strip()
+        llm_key = ensure_llm_key(session_data)
+        ok(f"Provider IA: {_active_provider}")
 
         # 3. Loop de jobs
         headers = {"Authorization": f"Bearer {jwt}"}
@@ -2406,7 +2301,7 @@ async def main():
                 job = r.json()
                 if job:
                     _clear_line()
-                    await run_job(client, backend_url, headers, job, cerebras_key)
+                    await run_job(client, backend_url, headers, job, llm_key)
                 else:
                     _spin(spin_idx, "Aguardando análises...")
                     spin_idx += 1

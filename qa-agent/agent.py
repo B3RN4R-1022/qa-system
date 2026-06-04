@@ -327,106 +327,39 @@ class BrowserUseLLM:
             object.__setattr__(self, name, value)
 
 
-def build_llm(cerebras_api_key: str = None):
+def build_llm(llm_key: str = None):
     """
     Cria o LLM conforme AI_PROVIDER no .env:
-      - cerebras   → gpt-oss-120b grátis, 1M tokens/dia, 3000 tok/s (rate limit ~1 req/min)
-      - sambanova  → Llama-3.3-70B grátis, $5 crédito, sem fila de 60s
-      - deepseek   → DeepSeek-R1 via API (~$0.10/teste, requer saldo)
-      - ollama     → local, ILIMITADO (requer hardware adequado)
-      - groq       → cloud grátis, 100K tokens/dia (~1-2 testes/dia)
+      - claude  → Claude (Anthropic) via API paga — mais capaz, confiável
+      - openai  → GPT via API paga — alternativa ao Claude
     """
-    provider = os.getenv("AI_PROVIDER", "groq").lower().strip()
+    provider = os.getenv("AI_PROVIDER", "claude").lower().strip()
 
-    if provider == "sambanova":
+    if provider == "openai":
         from langchain_openai import ChatOpenAI
-        # cerebras_api_key reutilizado como parâmetro genérico "llm_key" — contém a chave SambaNova
-        api_key = cerebras_api_key or os.getenv("SAMBANOVA_API_KEY")
+        api_key = llm_key or os.getenv("OPENAI_API_KEY")
         if not api_key:
-            raise ValueError("SAMBANOVA_API_KEY não configurada. Adicione no .env do qa-agent")
-        model = os.getenv("SAMBANOVA_MODEL", "Meta-Llama-3.3-70B-Instruct")
-        print(f"[QA Agent] ⚡ Usando SambaNova — modelo: {model}")
-        base_llm = ChatOpenAI(
-            model=model,
-            api_key=api_key,
-            base_url="https://api.sambanova.ai/v1",
-            temperature=0.1,
-        )
-        # SambaNova não tem a fila de 60s do Cerebras — fallback desabilitado
-        # (browser-use já tem retry automático em caso de 429 transiente)
-        return BrowserUseLLM(base_llm, provider_override="cerebras", fallback_llm=None), model
+            raise ValueError("OPENAI_API_KEY não configurada no .env do qa-agent")
+        model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+        print(f"[QA Agent] ⚡ Usando OpenAI — modelo: {model}")
+        base_llm = ChatOpenAI(model=model, api_key=api_key, temperature=0.1)
+        return BrowserUseLLM(base_llm, provider_override="openai"), model
 
-    elif provider == "cerebras":
-        from langchain_openai import ChatOpenAI
-        # Prioridade: key passada pelo usuário via Settings > .env
-        api_key = cerebras_api_key or os.getenv("CEREBRAS_API_KEY")
+    else:  # claude (padrão)
+        try:
+            from langchain_anthropic import ChatAnthropic
+        except ImportError:
+            import subprocess, sys
+            print("[QA Agent] Instalando langchain-anthropic...")
+            subprocess.check_call([sys.executable, '-m', 'pip', 'install', 'langchain-anthropic', '-q'])
+            from langchain_anthropic import ChatAnthropic
+        api_key = llm_key or os.getenv("ANTHROPIC_API_KEY")
         if not api_key:
-            raise ValueError("CEREBRAS_API_KEY não configurada. Adicione nas Configurações do QA System ou no .env do qa-agent")
-        # gpt-oss-120b: 3000 tok/s, gratuito, disponível no plano free Cerebras
-        # zai-glm-4.7: fallback gratuito, mais lento mas confiável
-        model = os.getenv("CEREBRAS_MODEL", "gpt-oss-120b")
-        # Proteção: modelos que já sabemos que NÃO existem no free tier
-        # (podem estar no .env de versões antigas do worker)
-        _UNAVAILABLE = {'llama3.1-8b', 'llama3.3-70b', 'llama-3.3-70b', 'llama-3.1-8b', 'llama3.1-70b', 'llama-3.1-70b'}
-        if model in _UNAVAILABLE:
-            print(f"[QA Agent] ⚠️  Modelo '{model}' não está no free tier → forçando gpt-oss-120b")
-            model = 'gpt-oss-120b'
-        fallback_model = "zai-glm-4.7" if model != "zai-glm-4.7" else "gpt-oss-120b"
-        print(f"[QA Agent] ⚡ Usando Cerebras — modelo: {model} | fallback: {fallback_model}")
-        base_llm = ChatOpenAI(
-            model=model,
-            api_key=api_key,
-            base_url="https://api.cerebras.ai/v1",
-            temperature=0.1,
-        )
-        fallback_llm = ChatOpenAI(
-            model=fallback_model,
-            api_key=api_key,
-            base_url="https://api.cerebras.ai/v1",
-            temperature=0.1,
-        )
-        return BrowserUseLLM(base_llm, provider_override="cerebras", fallback_llm=fallback_llm), model
-
-    elif provider == "deepseek":
-        from langchain_openai import ChatOpenAI
-        api_key = os.getenv("DEEPSEEK_API_KEY")
-        if not api_key:
-            raise ValueError("DEEPSEEK_API_KEY não configurada no .env do qa-agent")
-        model = os.getenv("DEEPSEEK_MODEL", "deepseek-reasoner")
-        print(f"[QA Agent] 🧠 Usando DeepSeek R1 — modelo: {model} (~$0.10/teste)")
-        base_llm = ChatOpenAI(
-            model=model,
-            api_key=api_key,
-            base_url="https://api.deepseek.com",
-            temperature=0,
-        )
-        return BrowserUseLLM(base_llm, provider_override="deepseek"), model
-
-    elif provider == "ollama":
-        from langchain_ollama import ChatOllama
-        model = os.getenv("OLLAMA_MODEL", "qwen2.5:7b")
-        base_url = os.getenv("OLLAMA_URL", "http://localhost:11434")
-        print(f"[QA Agent] 🦙 Usando Ollama local — modelo: {model} (ILIMITADO)")
-        base_llm = ChatOllama(
-            model=model,
-            base_url=base_url,
-            temperature=0.1,
-        )
-        return BrowserUseLLM(base_llm, provider_override="ollama"), model
-
-    else:  # groq (default)
-        from langchain_groq import ChatGroq
-        groq_api_key = os.getenv("GROQ_API_KEY")
-        if not groq_api_key:
-            raise ValueError("GROQ_API_KEY não configurada no .env do qa-agent")
-        model = "llama-3.3-70b-versatile"
-        print(f"[QA Agent] ☁️  Usando Groq — modelo: {model} (limite: 100K tokens/dia)")
-        base_llm = ChatGroq(
-            model=model,
-            api_key=groq_api_key,
-            temperature=0.1,
-        )
-        return BrowserUseLLM(base_llm, provider_override="groq"), model
+            raise ValueError("ANTHROPIC_API_KEY não configurada no .env do qa-agent")
+        model = os.getenv("CLAUDE_MODEL", "claude-haiku-4-5-20251001")
+        print(f"[QA Agent] ⚡ Usando Claude (Anthropic) — modelo: {model}")
+        base_llm = ChatAnthropic(model=model, api_key=api_key, temperature=0.1)
+        return BrowserUseLLM(base_llm, provider_override="anthropic"), model
 
 
 MAX_TASK_CHARS = 95_000   # browser-use hard limit é 100k; folga de 5k
@@ -686,7 +619,7 @@ async def run_qa_agent(
     description: str = "",
     headless: bool = False,
     max_steps: int = None,
-    cerebras_api_key: str = None,
+    llm_key: str = None,
     site_cache: str = None,
     code_context: str = None,
     site_map: str = None,
@@ -714,7 +647,7 @@ async def run_qa_agent(
     print(_timing_header)
     _write_timing(_timing_header)
 
-    llm, model_name = build_llm(cerebras_api_key=cerebras_api_key)
+    llm, model_name = build_llm(llm_key=llm_key)
 
     # Sessão do browser — cria uma nova ou reutiliza uma externa (para retries sem fechar o browser)
     if _external_session is not None:
