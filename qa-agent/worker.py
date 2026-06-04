@@ -33,7 +33,7 @@ from agent import run_qa_agent
 import pathlib as _pathlib
 load_dotenv(_pathlib.Path(__file__).parent / '.env', override=True)
 
-LOCAL_VERSION = "1.4.4"
+LOCAL_VERSION = "1.4.5"
 
 # Corrige CEREBRAS_MODEL imediatamente se .env tiver modelo desatualizado.
 # Garante que mesmo sem auto-update o modelo certo é usado na sessão atual.
@@ -867,11 +867,13 @@ def _extract_approved_from_report(report: str) -> list[str]:
     return approved[:8]  # máx 8 itens
 
 
-def _ask_analyst_hint(title: str, brief_report: str) -> tuple[str | None, str]:
+def _ask_analyst_hint(title: str, brief_report: str) -> tuple[str | None, str, bool]:
     """
     Quando o agente falha ou fica inconclusivo, pergunta ao analista
     se quer fornecer uma dica para tentar novamente.
-    Retorna (dica, contexto_do_progresso) — dica é None se o analista pular.
+    Retorna (dica, contexto_do_progresso, end_requested).
+      - dica        → texto para retry  |  None se Enter ou /end
+      - end_requested → True se o analista digitou /end (para tudo agora)
     """
     import re as _re
 
@@ -906,9 +908,13 @@ def _ask_analyst_hint(title: str, brief_report: str) -> tuple[str | None, str]:
     info("          'Após salvar aparece um toast verde de confirmação'")
     info("          'O item foi salvo, continue para o próximo critério'")
     print()
-    hint = input("  Dica (ou Enter para aceitar resultado atual): ").strip()
+    info("  Enter    → aceitar resultado e continuar para o próximo critério")
+    info("  /end     → aceitar resultado e ENCERRAR o teste agora")
     print()
-    return (hint if hint else None), progress_ctx
+    hint = input("  Dica (ou Enter · /end): ").strip()
+    print()
+    end_requested = hint.lower() == '/end'
+    return (None if (not hint or end_requested) else hint), progress_ctx, end_requested
 
 
 # ─── Helpers de critério individual ──────────────────────────────────────────
@@ -1098,7 +1104,20 @@ async def _run_single_criterion(
 
     # Se falhou, pede dica e retenta só este critério
     if not passed:
-        hint, _ = _ask_analyst_hint(criterion, report)
+        hint, _, end_requested = _ask_analyst_hint(criterion, report)
+        if end_requested:
+            info("🛑 /end recebido — encerrando teste aqui.")
+            return {
+                'criterion':       criterion,
+                'passed':          passed,
+                'approved_detail': approved_detail,
+                'failed_detail':   failed_detail,
+                'warning':         warning,
+                'cache_update':    cache_update,
+                'tokens':          tokens,
+                'cancelled':       False,
+                'end_requested':   True,
+            }
         if hint:
             info(f"🔄 Retentando critério {criterion_idx+1} com a dica...")
             print()
@@ -1610,6 +1629,10 @@ async def run_job(client, backend_url, headers, job, cerebras_key):
             info(f"{icon} Critério {i+1}/{len(criterios)}: {label}")
             criterion_results.append(cr)
 
+            if cr.get('end_requested'):
+                info(f"🛑 Teste encerrado em critério {i+1}/{len(criterios)} — compilando resultado parcial.")
+                break
+
         # Cancelado antes de qualquer resultado — nada a enviar
         if not criterion_results:
             print()
@@ -1702,7 +1725,7 @@ async def run_job(client, backend_url, headers, job, cerebras_key):
             ]))
         )
         if should_ask:
-            hint, progress_ctx = _ask_analyst_hint(job["title"], report or "")
+            hint, progress_ctx, _ = _ask_analyst_hint(job["title"], report or "")
             if hint:
                 info("🔄 Tentando novamente com sua dica...")
                 print()
