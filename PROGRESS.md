@@ -13,8 +13,8 @@ sugerir alteração — acionando os botões nativos de aprovação do Asana.
 - **Banco:** PostgreSQL no Supabase + Prisma ORM 5.22.0 (NÃO usar v7, tem breaking changes)
 - **Auth:** JWT (30d) + TOTP 2FA (Google Authenticator) via speakeasy/qrcode + bcrypt + cookie-parser
 - **Integração:** Asana REST API + Webhooks (via `fetch` nativo, NÃO SDK — tem `hasOwnProperty` errors)
-- **IA Chat:** **Cerebras** (`gpt-oss-120b`, fallback `zai-glm-4.7`) via REST API — 1M tokens/dia. Lê a key do banco (mesma do QA Agent). **Migrado do Groq.**
-- **IA QA Agent:** Python local + browser-use 0.12.9 + Playwright (Chromium) + Cerebras (primário) / **SambaNova** (alternativo, sem fila de 60s)
+- **IA Chat:** **Cerebras** (`gpt-oss-120b`, fallback `zai-glm-4.7`) via REST API — 1M tokens/dia. Lê a key do banco. **Migrado do Groq.**
+- **IA QA Agent:** Python local + browser-use 0.12.9 + Playwright (Chromium) + **Claude Haiku 4.5** (padrão) / **GPT-4o mini** (alternativo). Provider configurado via menu `[2]` no worker → salva `AI_PROVIDER` + chave no `.env`.
 - **Deploy:** Render (backend) + Vercel (frontend)
 - **Repositório:** https://github.com/B3RN4R-1022/qa-system (público — necessário para o installer)
 
@@ -98,7 +98,7 @@ sugerir alteração — acionando os botões nativos de aprovação do Asana.
   - `wix_sitemap` / `<projeto>` — mapa do site Wix Velo (JSON: baseUrl, pageCount, pages{})
 - **ProjectToolCall** — knowledge base por projeto (nova, v1.4.7). Campos: `projectName`, `topic` (ex: `auth/login`), `title`, `description`, `content` (detalhes para QA), `source` (arquivo origem). Chave única: `[projectName, topic]`. Gerada automaticamente a partir do código-fonte do repo (lotes de 3 arquivos → Cerebras) ou descoberta pelo agente durante testes Wix (`source: agent_discovery`).
 - **AIReport** — relatório do agente por task. Campos: taskId (unique), **userId** (novo — quem enfileirou, para isolamento de fila), status, report, tokensUsed
-- **DevTest** — teste manual iniciado por dev. Campos: userId, title, description, previewUrl, projectName, criteria (JSON), status, report, tokensUsed
+- **DevTest** — teste manual iniciado por dev. Campos: userId, title, description, previewUrl, projectName, criteria (JSON), **loginEmail** (novo v1.4.12), **loginPassword** (novo v1.4.12), status, report, tokensUsed
 
 > **DIRECT_URL (CRÍTICO para migrations):** `DATABASE_URL` porta 6543 (Transaction Pooler).
 > `DIRECT_URL` porta 5432 (Session Pooler, migrations). Usar `npx prisma db push`.
@@ -122,11 +122,11 @@ sugerir alteração — acionando os botões nativos de aprovação do Asana.
 - `GET|POST|DELETE /chat/history`, `POST /chat/message` — chat isolado por userId, via Cerebras
 - `GET|POST|DELETE /tasks/:id/ai-report` — relatório IA
 - `POST /tasks/:id/run-ai-qa` — enfileira análise; **seta userId = req.user.id no AIReport**
-- `GET|POST|DELETE /settings/ai` — config IA
+- `GET /settings/ai` — uso da API: custo hoje/total em BRL, tokens (AIReport + DevTest), breakdown por usuário para QA/admin. Pricing: Claude Haiku 4.5 ($0,80/$4,00 por 1M in/out), câmbio R$5,75/USD
 - `GET /qa-jobs/pending` — Pull model: worker busca próximo job **filtrado por userId** (isolamento por usuário). Retorna: `site_cache`, `repo_cache`, `project_type`, `has_sitemap`, `pending_remap`
 - `POST /qa-jobs/:id/claim` — worker reivindica job
 - `POST /qa-jobs/:id/result` — worker posta resultado; `siteCache+projectName` salva cache de UI
-- `GET /dev-tests`, `POST /dev-tests`, `GET /dev-tests/:id`, `DELETE /dev-tests/:id`, `POST /dev-tests/:id/rerun` (re-enfileira), `POST /dev-tests/:id/cancel` (para teste preso)
+- `GET /dev-tests`, `POST /dev-tests` (aceita `loginEmail`+`loginPassword`), `GET /dev-tests/:id`, `DELETE /dev-tests/:id`, `POST /dev-tests/:id/rerun` (aceita `loginEmail`+`loginPassword` para sobrescrever — abre formulário inline no frontend), `POST /dev-tests/:id/cancel`
 - `GET /projects` — lista projetos com stats: testCount, hasCache, hasRepo, **hasRepoCache**, **repoCacheUpdatedAt**, projectType, hasSitemap/sitemapPageCount, repoFileCount
 - `GET|PUT|DELETE /projects/:name/repo` — config do repo/tipo (merge no PUT)
 - `GET|PUT|DELETE /projects/:name/repo-cache` — **resumo QA do repositório** (DELETE também limpa lastCommit para forçar re-análise)
@@ -192,10 +192,10 @@ Frontend polling /ai-report ou /dev-tests/:id a cada 4s → exibe relatório
 
 | Arquivo | Descrição |
 |---------|-----------|
-| `worker.py` | **v1.4.11.** Login terminal, spinner/timer, loop de jobs, watcher de cancelamento. Auto-update (baixa só .py ao iniciar, reinicia sozinho). **Menu de configurações ao iniciar: [1] trocar usuário, [2] trocar provider+chave** (submenu Cerebras/SambaNova, salva `AI_PROVIDER` + chave no `.env` automaticamente). `estimate_steps_for_test()`. `summarize_repo_for_qa()` + `update_repo_cache_with_diff()`. **Checkpoints por critério:** `_run_single_criterion()`. `_compile_final_report()`, `_criterion_passed()`, `_extract_criterion_detail()`. Prompt de dica e steps. `_live_timer()` com `pause_event`. `_fix_env_model_now()` + `_patch_env_model_on_update()`. **v1.4.7:** `generate_tool_calls_from_repo()` (lotes de 3 arquivos → Cerebras/SambaNova → tool calls), `build_tool_call_controller()` (ações `search_project_tools` + `save_project_tool` via browser-use Controller), `_get_tool_call_titles()`, `_save_tool_call()`. **v1.4.9:** `_llm_call()` multi-provider (Cerebras + SambaNova), `ensure_sambanova_key()`, `_update_env_sambanova_key()`, `_update_env_provider()`. |
+| `worker.py` | **v1.4.18.** Login terminal, spinner/timer com **custo em BRL ao vivo**, loop de jobs, watcher de cancelamento. Auto-update. **Menu `[2]`** troca provider (Claude/OpenAI) e chave, salva `AI_PROVIDER`+chave no `.env`. `_llm_call()` suporta Anthropic API e OpenAI API (HTTP direto). `ensure_llm_key()`, `_update_env_api_key()`, `_update_env_provider()`. Constantes de precificação `_PRICE_IN_PER_M`/`_PRICE_OUT_PER_M`/`_USD_BRL`. `_cost_brl()` + `_fmt_brl()`. Ao final de cada teste: log de tokens + custo estimado. `_live_timer()` exibe custo acumulado via `get_live_cost_brl()`. Todo parâmetro `cerebras_key` renomeado para `llm_key`. |
 | `session.py` | Cross-platform: Windows=DPAPI, macOS=Keychain, Linux=chmod 600. |
-| `agent.py` | **v1.4.11.** browser-use wrapper. `max_failures=3`, `max_actions_per_step=5`. Prompt com PASSO 2/3 genérico. Truncagem de `code_context` (40k) e `site_map` (30k). **`build_llm` suporta:** `cerebras`, `sambanova` (novo), `deepseek`, `ollama`, `groq`. **v1.4.7:** `build_task` com `tool_call_titles` (índice compacto substitui code_context quando Controller disponível); `run_qa_agent` com `controller` + `tool_call_titles`; Agent criado com `controller` opcional via kwargs + TypeError fallback. `_effective_titles` = None quando controller é None (evita prompt com ações inexistentes). **v1.4.8:** `_fix_action_args()` — corrige nomes de ação antes da validação Pydantic: `input_text→input`, `element_index→index` (browser-use 0.12.9 renomeou internamente). `is_schema_error` no `ainvoke` captura ValidationError e retenta com `_invoke_clean_function_calling`. **`timing.log`**: log separado LLM vs browser por step. Guard `_UNAVAILABLE`. `_external_session`, `_no_initial_navigate`, `step_extension_callback`. |
-| `version.txt` | Versão atual (`1.4.11`). **LOCAL_VERSION em worker.py SEMPRE deve bater com este arquivo.** |
+| `agent.py` | **v1.4.18.** browser-use wrapper. `max_failures=3`, `max_actions_per_step=5`. **`build_llm` suporta apenas:** `claude` (Anthropic, padrão — Haiku 4.5) e `openai` (GPT-4o mini). Auto-instala `langchain-anthropic` se não instalado. **Custo ao vivo:** `BrowserUseLLM._live_cost_brl` atualizado em `_track_usage()` a cada step; `get_live_cost_brl()` + `reset_live_cost()` exportados. Preços: `_PRICE_IN_PER_M=0.80`, `_PRICE_OUT_PER_M=4.00` (Haiku 4.5). **Credenciais dinâmicas:** `build_task()` e `run_qa_agent()` aceitam `login_email`+`login_password`; PASSO 1 usa credenciais do job com flag `⚠️ PRIORIDADE ABSOLUTA`; site_cache instrui a não usar credenciais armazenadas. Parâmetro renomeado `cerebras_api_key` → `llm_key`. `_fix_action_args()`, `is_schema_error`, `timing.log`, `_external_session`, `_no_initial_navigate`, `step_extension_callback`. |
+| `version.txt` | Versão atual (`1.4.18`). **LOCAL_VERSION em worker.py SEMPRE deve bater com este arquivo.** |
 | `install.ps1` | Windows: `irm .../install.ps1 \| iex`. Necessário só na primeira instalação. |
 | `install.sh` | macOS: `curl -fsSL .../install.sh \| bash`. |
 
@@ -216,19 +216,17 @@ irm https://raw.githubusercontent.com/B3RN4R-1022/qa-system/master/qa-agent/inst
 curl -fsSL https://raw.githubusercontent.com/B3RN4R-1022/qa-system/master/qa-agent/install.sh | bash
 ```
 
-### Multi-provider LLM
+### Multi-provider LLM (v1.4.15+)
 
-| Provider | Modelo | Limite | Rate limit real | Uso |
-|----------|--------|--------|-----------------|-----|
-| `cerebras` | gpt-oss-120b / zai-glm-4.7 | 1M tokens/dia grátis | ~1 req/min (fila de 60s) | Padrão histórico |
-| `sambanova` | Meta-Llama-3.3-70B-Instruct | $5 crédito grátis | ~10 req/min (sem fila) | **Recomendado** |
-| `deepseek` | deepseek-reasoner | pago | — | Opcional |
-| `ollama` | qualquer modelo local | ilimitado | local | Requer hardware |
-| `groq` | llama-3.3-70b-versatile | 100K tokens/dia | 30 req/min | Fallback limitado |
+| Provider | Modelo padrão | Preço (in/out /1M) | Custo real/critério | Observações |
+|----------|--------------|-------------------|---------------------|-------------|
+| `claude` (**padrão**) | claude-haiku-4-5-20251001 | $0,80 / $4,00 | ~R$ 1,50–3,00 | Confiável, rápido |
+| `openai` | gpt-4o-mini | $0,15 / $0,60 | ~R$ 0,25–0,50 | 6x mais barato que Haiku |
 
-**Fallback automático:** se modelo primário retornar 429, troca para fallback sem reiniciar.
-**Trocar provider:** pressionar `[2]` no menu inicial → escolher Cerebras ou SambaNova → cola a chave → salva automaticamente `AI_PROVIDER` + chave no `.env`.
-**Por que SambaNova:** Cerebras free tier causa fila de ~60s por requisição (rate limit ~1 req/min), fazendo cada step do agente demorar 61s. SambaNova não tem essa fila.
+> **Custo alto por critério:** browser-use acumula contexto crescente a cada step (step 15 já carrega ~80k tokens de histórico). O custo é proporcional ao número de steps × tamanho do contexto.
+
+**Trocar provider:** pressionar `[2]` no menu inicial → escolher Claude (1) ou OpenAI (2) → colar chave → salva `AI_PROVIDER` + chave no `.env` automaticamente.
+**Modelo custom:** `CLAUDE_MODEL=claude-sonnet-4-6` ou `OPENAI_MODEL=gpt-4o` no `.env` do worker.
 
 ---
 
@@ -324,6 +322,13 @@ Fluxo para projetos `repo` e `wix_headless`:
 - **_update_env_* não atualiza os.environ:** salvar no .env não basta para a sessão atual → necessário `os.environ['KEY'] = value` após escrever o arquivo
 - **tool_call_titles sem controller:** se Controller não carregou (versão antiga browser-use), mostrar o índice de tool calls no prompt confunde o agente (instrui ações que não existem). Guard: `_effective_titles = tool_call_titles if controller is not None else None`
 - **ProjectToolCall.topic com barras:** tópicos como `auth/login` não podem ir como path param em Express → usar query param `?topic=auth/login` com `decodeURIComponent`
+- **LOCAL_VERSION desatualizado em worker.py:** versão bumped em version.txt mas não em `LOCAL_VERSION` constante do worker → auto-update em loop infinito. Sempre atualizar os dois juntos.
+- **SambaNova Meta-Llama-3.1-8B descontinuado:** fallback model removido pela SambaNova → usar sem fallback ou trocar para Claude/OpenAI
+- **SambaNova TPM muito baixo:** 70B model esgota tokens-por-minuto em testes com muitos steps → 429 consecutivos mesmo após sleep de 30s. Não usar SambaNova para browser-use
+- **Settings tokensUsed não atualizava:** `GET /settings/ai` só agregava `AIReport`, ignorava `DevTest`. Corrigido: agrega os dois
+- **Custo real por critério ~R$1,50–3,00:** browser-use acumula contexto crescente → step 15 já tem ~80k tokens de histórico. Estimativas de "custo por teste" só fazem sentido com dados reais do banco
+- **site_cache pode ter credenciais antigas:** `loginFlow` armazenado no cache contém credenciais de runs anteriores. O agente seguia o cache em vez do PASSO 1. Corrigido: cache avisa `⚠️ SEMPRE use as do PASSO 1`; PASSO 1 com credenciais tem flag `PRIORIDADE ABSOLUTA`
+- **langchain-anthropic não instalado:** build_llm tenta auto-instalar com `subprocess.check_call([sys.executable, '-m', 'pip', 'install', 'langchain-anthropic'])` na primeira execução com provider=claude
 
 ---
 
@@ -389,13 +394,38 @@ Fluxo para projetos `repo` e `wix_headless`:
   - `_fix_action_args()`: traduz nomes de ação antes de `model_validate` (`input_text→input`, `element_index→index`)
   - `is_schema_error` no `ainvoke`: captura ValidationError e retenta com `_invoke_clean_function_calling`
   - Elimina ~150 ValidationErrors por step que desperdiçavam steps e contavam como falhas
-- [x] **v1.4.9–1.4.11 — SambaNova como provider alternativo** — FEITO
+- [x] **v1.4.9–1.4.11 — SambaNova como provider alternativo** — FEITO (descontinuado em v1.4.15)
   - `build_llm`: novo case `sambanova` (Meta-Llama-3.3-70B, $5 crédito grátis, sem fila de 60s)
   - `_llm_call()` multi-provider substitui `_cerebras_call` (alias mantido)
-  - `ensure_sambanova_key()`, `_update_env_sambanova_key()`, `_update_env_provider()`
-  - Menu `[2]` agora pergunta qual provider (Cerebras/SambaNova) antes da chave e salva `AI_PROVIDER` no `.env` — sem editar arquivo manualmente
   - Fix: `cerebras_api_key or os.getenv("SAMBANOVA_API_KEY")` no case sambanova do `build_llm`
-  - Fix: `os.environ['SAMBANOVA_API_KEY'] = new_key` em `_update_env_sambanova_key`
+  - **Descontinuado:** SambaNova TPM muito baixo para browser-use com contexto crescente; fallback model (Meta-Llama-3.1-8B) descontinuado pela SambaNova
+- [x] **v1.4.12 — Credenciais de login por teste** — FEITO
+  - `DevTest` schema: `loginEmail` + `loginPassword` opcionais
+  - `POST /dev-tests` e `POST /dev-tests/:id/rerun` aceitam credenciais; rerun sobrescreve
+  - `/qa-jobs/pending` inclui `login_email`/`login_password` no payload
+  - `build_task()` + `run_qa_agent()` recebem credenciais dinâmicas; PASSO 1 usa as do job com `⚠️ PRIORIDADE ABSOLUTA`; site_cache instrui a não usar credenciais armazenadas
+  - Frontend: campos Email/Senha no formulário `/teste-qa`; botão Re-executar abre formulário inline com campos de credenciais
+- [x] **v1.4.13–1.4.14 — Fixes SambaNova** — FEITO
+  - v1.4.13: removido fallback depreciado (Meta-Llama-3.1-8B)
+  - v1.4.14: sleep 30s em 429 antes de propagar para o browser-use retry
+- [x] **v1.4.15 — Migração para Claude (Anthropic) e OpenAI** — FEITO
+  - `build_llm`: remove Cerebras, SambaNova, Groq, DeepSeek, Ollama; suporta apenas `claude` e `openai`
+  - Auto-instala `langchain-anthropic` se não instalado
+  - `_llm_call()` reescrito: Anthropic API (`/v1/messages`) e OpenAI API (`/v1/chat/completions`)
+  - `ensure_llm_key()` genérico substitui `ensure_cerebras_key`/`ensure_sambanova_key`
+  - `_update_env_api_key(key_name, value)` substitui funções específicas por provider
+  - Menu `[2]`: Claude (1) / OpenAI (2) — salva provider e chave no `.env`
+  - Todo `cerebras_key` renomeado para `llm_key` em todo o pipeline
+  - Removido `_fix_env_model_now()` e `_patch_env_model_on_update()` (Cerebras-specific)
+- [x] **v1.4.16–1.4.17 — Custo em BRL e contador ao vivo** — FEITO
+  - `settings.js`: agrega AIReport + DevTest (fix bug — só AIReport era contado), custo em BRL por pricing Haiku, breakdown por usuário para QA/admin
+  - `Settings.jsx`: exibe "Custo hoje" + "Custo total" em R$, tokens secundários, tabela por usuário; remove gerenciamento de chave Cerebras
+  - `agent.py`: `BrowserUseLLM._live_cost_brl` atualizado a cada step em `_track_usage()`; `get_live_cost_brl()` + `reset_live_cost()` exportados
+  - `worker.py`: `_live_timer()` lê `get_live_cost_brl()` e exibe `R$ X,XXXX` na linha do spinner; constantes de pricing + `_cost_brl()` + `_fmt_brl()`; log de custo ao final de cada teste
+- [x] **v1.4.18 — Claude Haiku 4.5 como padrão** — FEITO
+  - Modelo padrão: `claude-haiku-4-5-20251001` (era Sonnet 4.6)
+  - Pricing atualizado: $0,80/$4,00 por 1M tokens (era $3/$15)
+  - ~4x mais barato que Sonnet; custo real ~R$1,50–3,00/critério (Haiku)
 
 ### Backlog (aguardando autorização)
 - [ ] Botão "Mapear" da página Projetos virar job independente `wix_map` (hoje só seta pendingRemap)
@@ -405,4 +435,5 @@ Fluxo para projetos `repo` e `wix_headless`:
 - [ ] Vision no agente (comparação visual)
 - [ ] Heartbeat do worker → auto-reset de testes presos após timeout (hoje: manual via botão Parar)
 - [ ] Forçar agrupamento máximo de ações no prompt (hoje `max_actions_per_step=5` permite mas não força — LLM às vezes usa 1-2 por step)
-- [ ] Adicionar Gemini Flash como provider (30 req/min grátis, 1M tokens/min — melhor rate limit)
+- [ ] Trocar para GPT-4o mini (6x mais barato que Haiku, ~R$0,30/critério) — só trocar AI_PROVIDER no `.env` + OPENAI_API_KEY
+- [ ] Investigar `use_vision=False` no browser-use para reduzir tokens de screenshots (~25% do custo)
