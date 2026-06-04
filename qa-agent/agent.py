@@ -287,6 +287,10 @@ class BrowserUseLLM:
                             print(f"[BrowserUseLLM] function_calling limpo também falhou → {type(e2).__name__}: {e2}")
                             raise e2
 
+                    if is_rate_limit:
+                        print(f"[BrowserUseLLM] 429 → aguardando 30s para rate limit resetar...")
+                        await asyncio.sleep(30)
+
                     print(f"[BrowserUseLLM] structured FALHOU → {type(e).__name__}: {e}")
                     raise
             else:
