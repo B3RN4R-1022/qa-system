@@ -209,11 +209,24 @@ class BrowserUseLLM:
                         print(f"[BrowserUseLLM] fallback OK → type={type(result).__name__}")
                         return _CompletionWrapper(completion=result)
 
-                    # Schema incompatível em outro provider → fallback para schema limpo
-                    if 'min_items' in err_str or 'wrong_api_format' in err_str:
-                        print(f"[BrowserUseLLM] Schema rejeitado → tentando function_calling com schema limpo")
-                        result = await _invoke_clean_function_calling(self._llm, output_format, lc_msgs)
-                        return _CompletionWrapper(completion=result)
+                    # Schema incompatível ou Pydantic ValidationError (ex: LLM gerou ação com
+                    # formato antigo usando 'index' em vez do campo atual do browser-use) →
+                    # tenta de novo com function_calling e schema limpo
+                    is_schema_error = (
+                        'min_items'        in err_str or
+                        'wrong_api_format' in err_str or
+                        'validation error' in err_str.lower()  # pydantic ValidationError
+                    )
+                    if is_schema_error and not is_rate_limit:
+                        print(f"[BrowserUseLLM] Schema/ValidationError → retentando com function_calling limpo")
+                        try:
+                            raw, parsed = await _invoke_clean_function_calling(self._llm, output_format, lc_msgs)
+                            self._track_usage(raw)
+                            print(f"[BrowserUseLLM] function_calling limpo OK → type={type(parsed).__name__}")
+                            return _CompletionWrapper(completion=parsed)
+                        except Exception as e2:
+                            print(f"[BrowserUseLLM] function_calling limpo também falhou → {type(e2).__name__}: {e2}")
+                            raise e2
 
                     print(f"[BrowserUseLLM] structured FALHOU → {type(e).__name__}: {e}")
                     raise
