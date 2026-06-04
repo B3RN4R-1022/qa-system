@@ -33,7 +33,7 @@ from agent import run_qa_agent
 import pathlib as _pathlib
 load_dotenv(_pathlib.Path(__file__).parent / '.env', override=True)
 
-LOCAL_VERSION = "1.4.10"
+LOCAL_VERSION = "1.4.11"
 
 # Corrige CEREBRAS_MODEL imediatamente se .env tiver modelo desatualizado.
 # Garante que mesmo sem auto-update o modelo certo é usado na sessão atual.
@@ -1681,6 +1681,7 @@ def _update_env_sambanova_key(new_key: str):
             content += f'\nSAMBANOVA_API_KEY={new_key}\n'
         with open(env_path, 'w', encoding='utf-8') as f:
             f.write(content)
+        os.environ['SAMBANOVA_API_KEY'] = new_key  # atualiza sessão atual também
     except Exception:
         pass
 

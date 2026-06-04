@@ -336,7 +336,8 @@ def build_llm(cerebras_api_key: str = None):
 
     if provider == "sambanova":
         from langchain_openai import ChatOpenAI
-        api_key = os.getenv("SAMBANOVA_API_KEY")
+        # cerebras_api_key reutilizado como parâmetro genérico "llm_key" — contém a chave SambaNova
+        api_key = cerebras_api_key or os.getenv("SAMBANOVA_API_KEY")
         if not api_key:
             raise ValueError("SAMBANOVA_API_KEY não configurada. Adicione no .env do qa-agent")
         model         = os.getenv("SAMBANOVA_MODEL", "Meta-Llama-3.3-70B-Instruct")
