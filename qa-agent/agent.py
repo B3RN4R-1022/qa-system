@@ -326,14 +326,39 @@ class BrowserUseLLM:
 def build_llm(cerebras_api_key: str = None):
     """
     Cria o LLM conforme AI_PROVIDER no .env:
-      - cerebras  → llama-3.3-70b grátis, 1M tokens/dia (~6 testes completos)
-      - deepseek  → DeepSeek-R1 via API (~$0.10/teste, requer saldo)
-      - ollama    → local, ILIMITADO (requer hardware adequado)
-      - groq      → cloud grátis, 100K tokens/dia (~1 teste/dia)
+      - cerebras   → gpt-oss-120b grátis, 1M tokens/dia, 3000 tok/s (rate limit ~1 req/min)
+      - sambanova  → Llama-3.3-70B grátis, $5 crédito, sem fila de 60s
+      - deepseek   → DeepSeek-R1 via API (~$0.10/teste, requer saldo)
+      - ollama     → local, ILIMITADO (requer hardware adequado)
+      - groq       → cloud grátis, 100K tokens/dia (~1-2 testes/dia)
     """
     provider = os.getenv("AI_PROVIDER", "groq").lower().strip()
 
-    if provider == "cerebras":
+    if provider == "sambanova":
+        from langchain_openai import ChatOpenAI
+        api_key = os.getenv("SAMBANOVA_API_KEY")
+        if not api_key:
+            raise ValueError("SAMBANOVA_API_KEY não configurada. Adicione no .env do qa-agent")
+        model         = os.getenv("SAMBANOVA_MODEL", "Meta-Llama-3.3-70B-Instruct")
+        fallback_model = "Meta-Llama-3.1-8B-Instruct" if "70B" in model else "Meta-Llama-3.3-70B-Instruct"
+        print(f"[QA Agent] ⚡ Usando SambaNova — modelo: {model} | fallback: {fallback_model}")
+        base_llm = ChatOpenAI(
+            model=model,
+            api_key=api_key,
+            base_url="https://api.sambanova.ai/v1",
+            temperature=0.1,
+        )
+        fallback_llm = ChatOpenAI(
+            model=fallback_model,
+            api_key=api_key,
+            base_url="https://api.sambanova.ai/v1",
+            temperature=0.1,
+        )
+        # provider_override="cerebras" → reutiliza a lógica de function_calling limpo do Cerebras
+        # (SambaNova usa a mesma API OpenAI-compatible e responde igual ao Cerebras)
+        return BrowserUseLLM(base_llm, provider_override="cerebras", fallback_llm=fallback_llm), model
+
+    elif provider == "cerebras":
         from langchain_openai import ChatOpenAI
         # Prioridade: key passada pelo usuário via Settings > .env
         api_key = cerebras_api_key or os.getenv("CEREBRAS_API_KEY")
