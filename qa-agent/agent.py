@@ -1,5 +1,6 @@
 import os
 import copy
+import time
 import asyncio
 import logging
 from browser_use.agent.service import Agent
@@ -7,6 +8,19 @@ from browser_use.browser.profile import BrowserProfile
 from browser_use.browser.session import BrowserSession
 from browser_use.llm.messages import SystemMessage as BUSystemMessage, UserMessage as BUUserMessage, AssistantMessage as BUAssistantMessage
 from langchain_core.messages import SystemMessage as LCSystemMessage, HumanMessage, AIMessage
+
+# ─── Timing log ───────────────────────────────────────────────────────────────
+# Log separado para analisar o que está demorando: LLM vs ações do browser
+_TIMING_LOG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'timing.log')
+
+def _write_timing(msg: str):
+    """Appenda uma linha ao timing.log — log separado de performance."""
+    try:
+        with open(_TIMING_LOG_PATH, 'a', encoding='utf-8') as _f:
+            _f.write(msg + '\n')
+    except Exception:
+        pass
+
 
 # Campos de JSON Schema não suportados por alguns providers (Cerebras, etc.)
 _SCHEMA_UNSUPPORTED = frozenset({'min_items', 'max_items', 'uniqueItems', 'exclusiveMinimum', 'exclusiveMaximum'})
@@ -110,6 +124,10 @@ class BrowserUseLLM:
         self._tokens_in  = 0
         self._tokens_out = 0
         self._tokens_total = 0
+        # Contadores de timing (segundos)
+        self._t_last_step_end  = time.time()  # para calcular tempo browser entre steps
+        self._total_llm_s      = 0.0          # tempo total em chamadas LLM
+        self._total_browser_s  = 0.0          # tempo total em ações do browser
 
     @property
     def model_name(self):
@@ -152,53 +170,70 @@ class BrowserUseLLM:
 
     async def ainvoke(self, messages, output_format=None, **kwargs):
         kwargs.pop('session_id', None)
+        _t0    = time.time()
+        _gap   = _t0 - self._t_last_step_end  # tempo gasto pelo browser desde o último step
         print(f"[BrowserUseLLM] ainvoke | output_format={output_format is not None} | msgs={len(messages)}")
 
-        if output_format is not None:
-            lc_msgs = convert_messages(messages)
+        try:
+            if output_format is not None:
+                lc_msgs = convert_messages(messages)
 
-            async def _invoke_structured(llm):
-                if self.provider == 'cerebras':
-                    # Cerebras: function_calling com schema limpo + captura usage da resposta bruta
-                    raw, parsed = await _invoke_clean_function_calling(llm, output_format, lc_msgs)
-                    self._track_usage(raw)
-                    return parsed
-                # Outros providers: function_calling padrão com include_raw para capturar usage
-                structured = llm.with_structured_output(output_format, include_raw=True)
-                raw_result = await structured.ainvoke(lc_msgs)
-                self._track_usage(raw_result.get('raw'))
-                return raw_result['parsed']
+                async def _invoke_structured(llm):
+                    if self.provider == 'cerebras':
+                        # Cerebras: function_calling com schema limpo + captura usage da resposta bruta
+                        raw, parsed = await _invoke_clean_function_calling(llm, output_format, lc_msgs)
+                        self._track_usage(raw)
+                        return parsed
+                    # Outros providers: function_calling padrão com include_raw para capturar usage
+                    structured = llm.with_structured_output(output_format, include_raw=True)
+                    raw_result = await structured.ainvoke(lc_msgs)
+                    self._track_usage(raw_result.get('raw'))
+                    return raw_result['parsed']
 
-            try:
-                result = await _invoke_structured(self._llm)
-                print(f"[BrowserUseLLM] structured OK → type={type(result).__name__}")
-                return _CompletionWrapper(completion=result)
-
-            except Exception as e:
-                err_str = str(e)
-                is_rate_limit = '429' in err_str or 'queue_exceeded' in err_str or 'too_many_requests' in err_str
-
-                # 429 → troca para modelo fallback automaticamente
-                if is_rate_limit and self._fallback_llm and not self._using_fallback:
-                    print(f"[BrowserUseLLM] 429 → trocando para modelo fallback")
-                    self._llm = self._fallback_llm
-                    self._using_fallback = True
-                    self.model = getattr(self._fallback_llm, 'model', 'fallback')
+                try:
                     result = await _invoke_structured(self._llm)
-                    print(f"[BrowserUseLLM] fallback OK → type={type(result).__name__}")
+                    print(f"[BrowserUseLLM] structured OK → type={type(result).__name__}")
                     return _CompletionWrapper(completion=result)
 
-                # Schema incompatível em outro provider → fallback para schema limpo
-                if 'min_items' in err_str or 'wrong_api_format' in err_str:
-                    print(f"[BrowserUseLLM] Schema rejeitado → tentando function_calling com schema limpo")
-                    result = await _invoke_clean_function_calling(self._llm, output_format, lc_msgs)
-                    return _CompletionWrapper(completion=result)
+                except Exception as e:
+                    err_str = str(e)
+                    is_rate_limit = '429' in err_str or 'queue_exceeded' in err_str or 'too_many_requests' in err_str
 
-                print(f"[BrowserUseLLM] structured FALHOU → {type(e).__name__}: {e}")
-                raise
-        else:
-            lc_msgs = convert_messages(messages) if messages else messages
-            return await self._llm.ainvoke(lc_msgs, **kwargs)
+                    # 429 → troca para modelo fallback automaticamente
+                    if is_rate_limit and self._fallback_llm and not self._using_fallback:
+                        print(f"[BrowserUseLLM] 429 → trocando para modelo fallback")
+                        self._llm = self._fallback_llm
+                        self._using_fallback = True
+                        self.model = getattr(self._fallback_llm, 'model', 'fallback')
+                        result = await _invoke_structured(self._llm)
+                        print(f"[BrowserUseLLM] fallback OK → type={type(result).__name__}")
+                        return _CompletionWrapper(completion=result)
+
+                    # Schema incompatível em outro provider → fallback para schema limpo
+                    if 'min_items' in err_str or 'wrong_api_format' in err_str:
+                        print(f"[BrowserUseLLM] Schema rejeitado → tentando function_calling com schema limpo")
+                        result = await _invoke_clean_function_calling(self._llm, output_format, lc_msgs)
+                        return _CompletionWrapper(completion=result)
+
+                    print(f"[BrowserUseLLM] structured FALHOU → {type(e).__name__}: {e}")
+                    raise
+            else:
+                lc_msgs = convert_messages(messages) if messages else messages
+                return await self._llm.ainvoke(lc_msgs, **kwargs)
+        finally:
+            # ── Timing: registra duração desta chamada LLM e tempo de browser entre steps
+            _t1 = time.time()
+            _llm_s = _t1 - _t0
+            self._t_last_step_end   = _t1
+            self._total_llm_s      += _llm_s
+            self._total_browser_s  += _gap
+            _timing = (
+                f"[TIMING] Step {self._step:>2} | "
+                f"LLM: {_llm_s:.1f}s | "
+                f"Browser: {_gap:.1f}s"
+            )
+            print(_timing)
+            _write_timing(_timing)
 
     def with_structured_output(self, schema, **kwargs):
         return self._llm.with_structured_output(schema, **kwargs)
@@ -235,6 +270,12 @@ def build_llm(cerebras_api_key: str = None):
         # gpt-oss-120b: 3000 tok/s, gratuito, disponível no plano free Cerebras
         # zai-glm-4.7: fallback gratuito, mais lento mas confiável
         model = os.getenv("CEREBRAS_MODEL", "gpt-oss-120b")
+        # Proteção: modelos que já sabemos que NÃO existem no free tier
+        # (podem estar no .env de versões antigas do worker)
+        _UNAVAILABLE = {'llama3.1-8b', 'llama3.3-70b', 'llama-3.3-70b', 'llama-3.1-8b', 'llama3.1-70b', 'llama-3.1-70b'}
+        if model in _UNAVAILABLE:
+            print(f"[QA Agent] ⚠️  Modelo '{model}' não está no free tier → forçando gpt-oss-120b")
+            model = 'gpt-oss-120b'
         fallback_model = "zai-glm-4.7" if model != "zai-glm-4.7" else "gpt-oss-120b"
         print(f"[QA Agent] ⚡ Usando Cerebras — modelo: {model} | fallback: {fallback_model}")
         base_llm = ChatOpenAI(
@@ -528,6 +569,18 @@ async def run_qa_agent(
 
     if max_steps is None:
         max_steps = int(os.getenv("MAX_STEPS", "15"))
+
+    # ── Cabeçalho no timing.log ──────────────────────────────────────────
+    _t_test_start = time.time()
+    _ts = time.strftime('%Y-%m-%d %H:%M:%S')
+    _timing_header = (
+        f"\n{'='*62}\n"
+        f"[TIMING] TESTE : {title}\n"
+        f"[TIMING] Início: {_ts} | max_steps={max_steps}"
+    )
+    print(_timing_header)
+    _write_timing(_timing_header)
+
     llm, model_name = build_llm(cerebras_api_key=cerebras_api_key)
 
     # Diretório temporário isolado para cada execução.
@@ -586,7 +639,13 @@ async def run_qa_agent(
     )
 
     def log_token_summary():
-        print(
+        _t_end   = time.time()
+        _total_s = _t_end - _t_test_start
+        _avg_s   = _total_s / max(llm._step, 1)
+        _llm_pct = (llm._total_llm_s / _total_s * 100) if _total_s > 0 else 0
+        _br_pct  = (llm._total_browser_s / _total_s * 100) if _total_s > 0 else 0
+
+        _token_summary = (
             f"\n[Tokens] ══════════════════════════════\n"
             f"[Tokens] 📊 RESUMO FINAL\n"
             f"[Tokens]    Steps executados : {llm._step}\n"
@@ -596,6 +655,19 @@ async def run_qa_agent(
             f"[Tokens]    Limite diário    : {llm._tokens_total / 1_000_000 * 100:.2f}% de 1.000.000\n"
             f"[Tokens] ══════════════════════════════\n"
         )
+        print(_token_summary)
+
+        _timing_summary = (
+            f"[TIMING] ── RESUMO ──────────────────────────────────────\n"
+            f"[TIMING] Duração total  : {_total_s:.1f}s\n"
+            f"[TIMING] Steps          : {llm._step} | Média/step: {_avg_s:.1f}s\n"
+            f"[TIMING] Tempo LLM      : {llm._total_llm_s:.1f}s ({_llm_pct:.0f}%)\n"
+            f"[TIMING] Tempo Browser  : {llm._total_browser_s:.1f}s ({_br_pct:.0f}%)\n"
+            f"[TIMING] ─────────────────────────────────────────────────\n"
+            f"{'='*62}"
+        )
+        print(_timing_summary)
+        _write_timing(_timing_summary)
 
     # Lista compartilhada para acumular logs do console (preenchida pelo background task)
     console_logs = []

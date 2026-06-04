@@ -33,7 +33,25 @@ from agent import run_qa_agent
 import pathlib as _pathlib
 load_dotenv(_pathlib.Path(__file__).parent / '.env', override=True)
 
-LOCAL_VERSION = "1.4.3"
+LOCAL_VERSION = "1.4.4"
+
+# Corrige CEREBRAS_MODEL imediatamente se .env tiver modelo desatualizado.
+# Garante que mesmo sem auto-update o modelo certo é usado na sessão atual.
+def _fix_env_model_now():
+    import re as _r
+    _UNAVAIL = {'llama3.1-8b','llama3.3-70b','llama-3.3-70b','llama-3.1-8b','llama3.1-70b','llama-3.1-70b'}
+    try:
+        p = _pathlib.Path(__file__).parent / '.env'
+        if not p.exists():
+            return
+        txt = p.read_text(encoding='utf-8', errors='ignore')
+        m = _r.search(r'^CEREBRAS_MODEL=(.+)$', txt, _r.MULTILINE)
+        if m and m.group(1).strip().strip('"').strip("'") in _UNAVAIL:
+            p.write_text(_r.sub(r'^CEREBRAS_MODEL=.*$', 'CEREBRAS_MODEL=gpt-oss-120b', txt, flags=_r.MULTILINE), encoding='utf-8')
+            os.environ['CEREBRAS_MODEL'] = 'gpt-oss-120b'
+    except Exception:
+        pass
+_fix_env_model_now()
 DEFAULT_BACKEND = os.getenv("BACKEND_URL", "https://qa-system-5vpf.onrender.com").rstrip("/")
 RAW_BASE    = "https://raw.githubusercontent.com/B3RN4R-1022/qa-system/master/qa-agent"
 VERSION_URL = f"{RAW_BASE}/version.txt"
@@ -1188,6 +1206,8 @@ async def check_update(client):
         print(f"  ⚠️  {len(failed)} arquivo(s) não puderam ser baixados.")
         print("     Rode o instalador manualmente se o problema persistir.")
     else:
+        # Corrige o modelo no .env se estava desatualizado (ex: llama3.1-8b de versões antigas)
+        _patch_env_model_on_update(script_dir)
         ok(f"Atualização concluída — versão {remote} instalada.")
         print()
         print("  ↩  Reiniciando o agente para aplicar as mudanças...")
@@ -1290,6 +1310,45 @@ def _update_env_cerebras_key(new_key: str):
         )
         with open(env_path, 'w', encoding='utf-8') as f:
             f.write(new_content)
+    except Exception:
+        pass
+
+
+def _patch_env_model_on_update(script_dir: str = None):
+    """
+    Corrige CEREBRAS_MODEL no .env quando o valor atual não está disponível no free tier.
+    Chamado após auto-update e também na inicialização, para cobrir .envs antigos.
+    Modelos removidos do free tier: llama3.1-8b, llama3.3-70b e variações.
+    """
+    import re as _re
+    _dir = script_dir or os.path.dirname(os.path.abspath(__file__))
+    env_path = os.path.join(_dir, '.env')
+    if not os.path.exists(env_path):
+        return
+    _UNAVAILABLE = {
+        'llama3.1-8b', 'llama3.3-70b',
+        'llama-3.3-70b', 'llama-3.1-8b',
+        'llama3.1-70b', 'llama-3.1-70b',
+    }
+    try:
+        with open(env_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+        m = _re.search(r'^CEREBRAS_MODEL=(.+)$', content, _re.MULTILINE)
+        if not m:
+            return  # variável não está no .env — o padrão do código já é gpt-oss-120b
+        current_model = m.group(1).strip().strip('"').strip("'")
+        if current_model not in _UNAVAILABLE:
+            return  # modelo OK
+        new_content = _re.sub(
+            r'^CEREBRAS_MODEL=.*$',
+            'CEREBRAS_MODEL=gpt-oss-120b',
+            content, flags=_re.MULTILINE
+        )
+        with open(env_path, 'w', encoding='utf-8') as f:
+            f.write(new_content)
+        print(f"  ✅ .env corrigido: CEREBRAS_MODEL {current_model} → gpt-oss-120b")
+        # Atualiza variável de ambiente da sessão atual também
+        os.environ['CEREBRAS_MODEL'] = 'gpt-oss-120b'
     except Exception:
         pass
 
