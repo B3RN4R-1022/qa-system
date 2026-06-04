@@ -33,7 +33,7 @@ from agent import run_qa_agent
 import pathlib as _pathlib
 load_dotenv(_pathlib.Path(__file__).parent / '.env', override=True)
 
-LOCAL_VERSION = "1.4.6"
+LOCAL_VERSION = "1.4.7"
 
 # Corrige CEREBRAS_MODEL imediatamente se .env tiver modelo desatualizado.
 # Garante que mesmo sem auto-update o modelo certo é usado na sessão atual.
@@ -742,6 +742,233 @@ async def _save_wix_sitemap(client, backend_url, headers, project_name, site_map
         err(f"Erro ao salvar mapa do site: {e}")
 
 
+# ─── Tool Calls — knowledge base por projeto ──────────────────────────────────
+
+async def _get_tool_call_titles(client, backend_url, headers, project_name):
+    """Busca a lista de tool calls (topic+title+description) do projeto no backend."""
+    try:
+        r = await client.get(
+            f"{backend_url}/projects/{project_name}/tools",
+            headers=headers, timeout=8
+        )
+        if r.status_code == 200:
+            return r.json()  # [{topic, title, description, source}, ...]
+    except Exception:
+        pass
+    return []
+
+
+async def _save_tool_call(client, backend_url, headers, project_name,
+                          topic: str, title: str, description: str, content: str, source: str = ""):
+    """Cria ou atualiza um tool call no backend."""
+    try:
+        await client.post(
+            f"{backend_url}/projects/{project_name}/tools",
+            headers={**headers, 'Content-Type': 'application/json'},
+            json={"topic": topic, "title": title, "description": description,
+                  "content": content, "source": source},
+            timeout=10
+        )
+    except Exception as e:
+        err(f"Erro ao salvar tool call '{topic}': {e}")
+
+
+async def generate_tool_calls_from_repo(raw_code: str, project_name: str, cerebras_key: str) -> list:
+    """
+    Gera tool calls a partir do código-fonte do repositório.
+    Divide em blocos por arquivo, filtra os relevantes (têm rotas/funções/classes)
+    e usa Cerebras em lotes de 3 arquivos para extrair tool calls de QA.
+    Retorna lista de dicts: [{topic, title, description, content, source}]
+    """
+    import re, json as _json
+
+    # O raw_code é formatado por analyze_repo_full com \n#### como separador de arquivo
+    blocks = re.split(r'\n#### ', raw_code)
+
+    # Detecta arquivos com lógica real (rotas, exports, classes, funções)
+    _HAS_LOGIC = re.compile(
+        r'(export\s+(default\s+)?(function|class|const|async\s+function)|'
+        r'router\.(get|post|put|delete|patch)\s*\(|'
+        r'app\.(get|post|put|delete)\s*\(|'
+        r'@(Controller|Route|Get|Post|Put|Delete|Patch)\b|'
+        r'\bdef\s+[a-zA-Z_][a-zA-Z0-9_]*\s*\()',
+        re.MULTILINE
+    )
+
+    relevant = []
+    for block in blocks:
+        if not block.strip() or len(block.strip()) < 120:
+            continue
+        first_line = block.split('\n')[0]
+        file_path  = first_line.split(' (')[0].strip()
+        if not file_path:
+            continue
+        # Só arquivos de lógica — ignora CSS, HTML puro, config simples
+        if not any(file_path.endswith(ext) for ext in ('.js', '.ts', '.tsx', '.py', '.jsx', '.mjs', '.cjs')):
+            continue
+        if _HAS_LOGIC.search(block):
+            relevant.append((file_path, block[:2500]))
+
+    if not relevant:
+        info("Nenhum arquivo com lógica relevante encontrado para gerar tool calls.")
+        return []
+
+    info(f"🔧 Gerando tool calls de {len(relevant)} arquivo(s) em lotes de 3...")
+
+    BATCH = 3
+    tool_calls = []
+
+    for i in range(0, len(relevant), BATCH):
+        batch      = relevant[i:i + BATCH]
+        files_text = ""
+        for fp, code in batch:
+            files_text += f"\n--- {fp} ---\n{code}\n"
+
+        prompt = f"""Analise estes arquivos e gere ToolCalls relevantes para QA.
+Responda APENAS com um array JSON válido (sem markdown, sem explicações).
+Máximo 2 ToolCalls por arquivo. Foque em: rotas de API, formulários, autenticação, regras de negócio.
+Retorne [] se não houver nada testável.
+
+Estrutura de cada item:
+{{
+  "topic": "categoria/funcionalidade (ex: auth/login, products/list)",
+  "title": "Título curto até 50 chars",
+  "description": "Uma frase: o que faz e quando usar",
+  "content": "Detalhes para QA: endpoint, campos obrigatórios, comportamento esperado, erros possíveis",
+  "source": "nome_do_arquivo.js"
+}}
+
+Arquivos:
+{files_text}"""
+
+        result = await _cerebras_call(cerebras_key, prompt, max_tokens=1200)
+
+        if result:
+            try:
+                # Remove markdown code fences se presentes
+                clean = result.strip()
+                if '```' in clean:
+                    clean = re.sub(r'```(?:json)?\n?', '', clean).strip()
+                json_match = re.search(r'\[[\s\S]*\]', clean)
+                if json_match:
+                    items = _json.loads(json_match.group(0))
+                    for item in items:
+                        if isinstance(item, dict) and all(k in item for k in ('topic', 'title', 'description', 'content')):
+                            if 'source' not in item and batch:
+                                item['source'] = batch[0][0]
+                            tool_calls.append(item)
+            except Exception:
+                pass
+
+        await asyncio.sleep(0.4)  # respeita rate limit do Cerebras
+
+    info(f"✅ {len(tool_calls)} tool call(s) gerado(s) para '{project_name}'.")
+    return tool_calls
+
+
+def build_tool_call_controller(project_name: str, backend_url: str, headers: dict):
+    """
+    Cria um Controller do browser-use com duas ações personalizadas:
+      - search_project_tools(query) : busca funcionalidades na knowledge base do projeto
+      - save_project_tool(...)      : salva uma descoberta durante o teste (Wix)
+    Retorna None se a versão do browser-use não suportar Controller.
+    """
+    try:
+        from browser_use import Controller
+        from browser_use.agent.views import ActionResult
+        from pydantic import BaseModel
+    except ImportError:
+        try:
+            from browser_use.controller.service import Controller
+            from browser_use.agent.views import ActionResult
+            from pydantic import BaseModel
+        except ImportError:
+            print("[QA Worker] ⚠️  Controller não disponível — tool calls desativados para esta versão do browser-use")
+            return None
+
+    controller = Controller()
+
+    class SearchParams(BaseModel):
+        query: str
+
+    class SaveParams(BaseModel):
+        topic: str
+        title: str
+        description: str
+        content: str
+
+    @controller.registry.action(
+        "Buscar detalhes de uma funcionalidade do projeto na knowledge base. "
+        "Use antes de testar qualquer feature para saber endpoints, campos e comportamento esperado.",
+        param_model=SearchParams
+    )
+    async def search_project_tools(params: SearchParams) -> ActionResult:
+        import httpx as _httpx
+        try:
+            async with _httpx.AsyncClient(timeout=8) as c:
+                # Busca por texto em topic/title/description
+                r = await c.get(
+                    f"{backend_url}/projects/{project_name}/tools",
+                    headers=headers, params={"q": params.query}
+                )
+                if r.status_code == 200:
+                    tools = r.json()
+                    if tools:
+                        # Retorna conteúdo completo do primeiro resultado mais relevante
+                        r2 = await c.get(
+                            f"{backend_url}/projects/{project_name}/tools",
+                            headers=headers, params={"topic": tools[0]['topic']}
+                        )
+                        if r2.status_code == 200 and r2.json():
+                            full = r2.json()
+                            result_text = (
+                                f"[{full['topic']}] {full['title']}\n"
+                                f"Descrição: {full.get('description', '')}\n"
+                                f"Detalhes:\n{full['content']}"
+                            )
+                            if len(tools) > 1:
+                                result_text += f"\n\nOutros resultados para '{params.query}':\n"
+                                result_text += "\n".join(
+                                    f"  - [{t['topic']}] {t['title']}" for t in tools[1:4]
+                                )
+                            return ActionResult(extracted_content=result_text, include_in_memory=True)
+        except Exception:
+            pass
+        return ActionResult(
+            extracted_content=f"Nenhuma funcionalidade encontrada para: '{params.query}'",
+            include_in_memory=True
+        )
+
+    @controller.registry.action(
+        "Salvar uma descoberta de funcionalidade do projeto durante o teste. "
+        "Use em projetos Wix para registrar páginas, formulários e fluxos encontrados.",
+        param_model=SaveParams
+    )
+    async def save_project_tool(params: SaveParams) -> ActionResult:
+        import httpx as _httpx
+        try:
+            async with _httpx.AsyncClient(timeout=8) as c:
+                await c.post(
+                    f"{backend_url}/projects/{project_name}/tools",
+                    headers={**headers, "Content-Type": "application/json"},
+                    json={
+                        "topic":       params.topic,
+                        "title":       params.title,
+                        "description": params.description,
+                        "content":     params.content,
+                        "source":      "agent_discovery",
+                    }
+                )
+        except Exception:
+            pass
+        return ActionResult(
+            extracted_content=f"Descoberta registrada: [{params.topic}] {params.title}",
+            include_in_memory=True
+        )
+
+    return controller
+
+
 def _ask_headless(prompt_text: str) -> bool:
     """Pergunta ao usuário se quer ver o browser. Retorna True = headless (oculto)."""
     resp = input(f"  {prompt_text} [s/n]: ").strip().lower()
@@ -1035,6 +1262,8 @@ async def _run_single_criterion(
     site_cache, repo_cache_context, site_map_context,
     test_headless, max_steps,
     client, backend_url, headers, task_id, job_type,
+    controller=None,        # Controller do browser-use com search/save tool calls
+    tool_call_titles=None,  # índice da knowledge base para o prompt do agente
 ) -> dict:
     """
     Executa UM critério. O browser permanece ABERTO durante prompts de dica ou
@@ -1096,6 +1325,8 @@ async def _run_single_criterion(
             _external_session=session,
             _no_initial_navigate=no_nav,
             step_extension_callback=_step_ext_cb,
+            controller=controller,
+            tool_call_titles=tool_call_titles,
         ))
         _tt = asyncio.create_task(
             _live_timer(f"Crit. {criterion_idx+1}: {criterion[:30]}", pause_event=_timer_paused)
@@ -1570,6 +1801,7 @@ async def run_job(client, backend_url, headers, job, cerebras_key):
     # e reutilizado (só o diff atualiza o cache nas próximas execuções).
     repo_cache_context = job.get('repo_cache')  # cache já salvo, se houver
     new_head = None
+    raw_code = None  # código-fonte bruto — preenchido apenas na primeira análise completa
 
     if project_name and project_type in ('wix_headless', 'repo'):
         repo_path = await ensure_repo_path(client, backend_url, headers, project_name)
@@ -1582,7 +1814,7 @@ async def run_job(client, backend_url, headers, job, cerebras_key):
                 # Primeira análise — lê tudo e resume via Cerebras
                 info("🔍 Primeira análise — lendo repositório completo...")
                 print()
-                raw_code, new_head, repo_err = analyze_repo_full(repo_path)
+                raw_code, new_head, repo_err = analyze_repo_full(repo_path)  # raw_code usado depois para gerar tool calls
                 if repo_err:
                     err(f"Repositório: {repo_err}")
                 elif raw_code:
@@ -1622,6 +1854,39 @@ async def run_job(client, backend_url, headers, job, cerebras_key):
                     else:
                         info("Erro ao atualizar cache — usando versão anterior.")
         print()
+
+    # ── Tool Calls: carrega ou gera knowledge base do projeto ────────────
+    # Prioridade: tool_call_titles já vem no job (/pending os inclui se existirem).
+    # Se vierem vazios, busca do backend. Se ainda vazio e temos raw_code, gera agora.
+    tool_call_titles = job.get('tool_call_titles') or []
+
+    if project_name and not tool_call_titles:
+        existing_tools = await _get_tool_call_titles(client, backend_url, headers, project_name)
+        if existing_tools:
+            tool_call_titles = [
+                f"[{t['topic']}] {t['title']}: {t['description']}" for t in existing_tools
+            ]
+            info(f"📚 Knowledge base: {len(tool_call_titles)} funcionalidades carregadas.")
+        elif raw_code:
+            # Primeira vez com repo: gera tool calls automaticamente
+            info("🔧 Gerando knowledge base do projeto a partir do repositório...")
+            print()
+            tc_list = await generate_tool_calls_from_repo(raw_code, project_name, cerebras_key)
+            if tc_list:
+                for tc in tc_list:
+                    await _save_tool_call(
+                        client, backend_url, headers, project_name,
+                        tc['topic'], tc['title'],
+                        tc.get('description', ''), tc['content'], tc.get('source', '')
+                    )
+                ok(f"Knowledge base criada — {len(tc_list)} funcionalidades salvas.")
+                tool_call_titles = [
+                    f"[{tc['topic']}] {tc['title']}: {tc.get('description', '')}" for tc in tc_list
+                ]
+            print()
+
+    # Controller: ações search_project_tools + save_project_tool para o agente
+    controller = build_tool_call_controller(project_name, backend_url, headers) if project_name else None
 
     # ── Estimativa inteligente de steps ──────────────────────────────────
     info("🤖 Estimando steps necessários para o teste...")
@@ -1674,6 +1939,8 @@ async def run_job(client, backend_url, headers, job, cerebras_key):
                 headers=headers,
                 task_id=task_id,
                 job_type=job_type,
+                controller=controller,
+                tool_call_titles=tool_call_titles,
             )
 
             if cr.get('cancelled'):
@@ -1736,6 +2003,8 @@ async def run_job(client, backend_url, headers, job, cerebras_key):
             code_context=repo_cache_context,
             site_map=site_map_context,
             max_steps=estimated_steps,
+            controller=controller,
+            tool_call_titles=tool_call_titles,
         ))
         timer_task  = asyncio.create_task(_live_timer(job["title"]))
         cancel_task = asyncio.create_task(

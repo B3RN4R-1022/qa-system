@@ -279,4 +279,91 @@ router.delete('/:name/repo-cache', async (req, res) => {
   }
 })
 
+// ── Tool Calls ─────────────────────────────────────────────────────────────────
+// Knowledge base por projeto: funcionalidades mapeadas automaticamente do repo
+// ou descobertas pelo agente durante testes Wix.
+
+// GET /projects/:name/tools — lista tool calls (topic+title+description)
+//   ?q=query   → filtra por texto em topic/title/description
+//   ?topic=X   → retorna um tool call completo (com content) pelo topic exato
+router.get('/:name/tools', async (req, res) => {
+  try {
+    const { q, topic } = req.query
+
+    // Busca exata por topic → retorna objeto completo com content
+    if (topic) {
+      const tool = await prisma.projectToolCall.findUnique({
+        where: { projectName_topic: { projectName: req.params.name, topic: decodeURIComponent(topic) } }
+      })
+      return res.json(tool || null)
+    }
+
+    // Lista com campos de busca (sem content para economizar payload)
+    const tools = await prisma.projectToolCall.findMany({
+      where: { projectName: req.params.name },
+      select: { topic: true, title: true, description: true, source: true },
+      orderBy: { topic: 'asc' }
+    })
+
+    if (q) {
+      const query = q.toLowerCase().trim()
+      return res.json(tools.filter(t =>
+        t.topic.toLowerCase().includes(query) ||
+        t.title.toLowerCase().includes(query) ||
+        t.description.toLowerCase().includes(query)
+      ))
+    }
+
+    res.json(tools)
+  } catch (err) {
+    console.error('[Projects] Erro ao buscar tool calls:', err)
+    res.status(500).json({ error: 'Erro ao buscar tool calls' })
+  }
+})
+
+// POST /projects/:name/tools — cria ou atualiza um tool call (upsert por topic)
+// Body: { topic, title, description?, content, source? }
+router.post('/:name/tools', async (req, res) => {
+  try {
+    const { topic, title, description, content, source } = req.body || {}
+    if (!topic || !title || !content) {
+      return res.status(400).json({ error: 'topic, title e content são obrigatórios' })
+    }
+    const tool = await prisma.projectToolCall.upsert({
+      where: { projectName_topic: { projectName: req.params.name, topic } },
+      create: {
+        projectName: req.params.name, topic, title,
+        description: description || '', content, source: source || ''
+      },
+      update: { title, description: description || '', content, source: source || '' }
+    })
+    res.json(tool)
+  } catch (err) {
+    console.error('[Projects] Erro ao salvar tool call:', err)
+    res.status(500).json({ error: 'Erro ao salvar tool call' })
+  }
+})
+
+// DELETE /projects/:name/tools — remove tool calls
+//   ?topic=X → remove apenas o topic indicado
+//   (sem query) → remove TODOS os tool calls do projeto
+router.delete('/:name/tools', async (req, res) => {
+  try {
+    const { topic } = req.query
+    if (topic) {
+      await prisma.projectToolCall.delete({
+        where: { projectName_topic: { projectName: req.params.name, topic: decodeURIComponent(topic) } }
+      })
+      return res.json({ ok: true })
+    }
+    const { count } = await prisma.projectToolCall.deleteMany({
+      where: { projectName: req.params.name }
+    })
+    res.json({ ok: true, deleted: count })
+  } catch (err) {
+    console.error('[Projects] Erro ao remover tool calls:', err)
+    res.status(500).json({ error: 'Erro ao remover tool calls' })
+  }
+})
+
 module.exports = router

@@ -339,7 +339,7 @@ MAX_CODE_CHARS = 40_000   # máx para código-fonte no prompt
 MAX_MAP_CHARS  = 30_000   # máx para sitemap no prompt
 
 
-def build_task(title: str, preview_url: str, criteria: list, project_name: str, knowledge: str, skills: str, description: str = "", site_cache: str = None, code_context: str = None, site_map: str = None, max_steps: int = 15) -> str:
+def build_task(title: str, preview_url: str, criteria: list, project_name: str, knowledge: str, skills: str, description: str = "", site_cache: str = None, code_context: str = None, site_map: str = None, max_steps: int = 15, tool_call_titles: list = None) -> str:
     # Trunca seções variáveis grandes antes de montar o prompt
     # para não estourar o limite de 100k chars do browser-use
     _code = code_context
@@ -371,9 +371,23 @@ quais botões estão disponíveis e como é a navegação. Use este mapa para ir
 {_map}
 """
 
-    # Seção de resumo QA do repositório — gerado pela Cerebras, não código bruto
+    # Seção de conhecimento do projeto — tool calls têm prioridade sobre o resumo bruto
+    # Tool calls: índice compacto + agent busca detalhes sob demanda (search_project_tools)
+    # Fallback: resumo QA gerado pelo Cerebras (40k chars) quando não há tool calls
     code_section = ""
-    if _code:
+    if tool_call_titles and len(tool_call_titles) > 0:
+        _titles_text = "\n".join(f"  {t}" for t in tool_call_titles[:100])
+        code_section = f"""## KNOWLEDGE BASE DO PROJETO — {len(tool_call_titles)} funcionalidades mapeadas
+Use a ação **search_project_tools(query)** para buscar detalhes de qualquer funcionalidade antes de agir.
+💡 Exemplos de uso:
+  search_project_tools("login")       → retorna fluxo de autenticação, campos, endpoint
+  search_project_tools("criar produto") → retorna formulário, validações, comportamento esperado
+Para projetos Wix: use **save_project_tool(...)** para registrar funcionalidades descobertas durante o teste.
+
+Funcionalidades disponíveis:
+{_titles_text}
+"""
+    elif _code:
         code_section = f"""## ANÁLISE DO REPOSITÓRIO — resumo QA (use para guiar os testes)
 Este resumo foi gerado automaticamente a partir do código-fonte. Use-o para:
 - Saber quais rotas e funcionalidades existem (sem precisar explorar do zero)
@@ -567,6 +581,8 @@ async def run_qa_agent(
     _external_session=None,          # sessão externa — não cria nem fecha o browser
     _no_initial_navigate: bool = False,  # pula navegação inicial (retry com mesmo browser)
     step_extension_callback=None,    # async fn() -> int|None — pergunta mais steps ao analista
+    controller=None,                 # Controller do browser-use com tool calls personalizados
+    tool_call_titles: list = None,   # índice da knowledge base (substitui code_context no prompt)
 ) -> dict:
     import tempfile, shutil
 
@@ -597,7 +613,11 @@ async def run_qa_agent(
             browser_profile=BrowserProfile(headless=headless, user_data_dir=temp_profile_dir)
         )
 
-    task_text = build_task(title, preview_url, criteria, project_name, knowledge, skills, description, site_cache=site_cache, code_context=code_context, site_map=site_map, max_steps=max_steps)
+    # tool_call_titles só vai para o prompt se o controller está disponível —
+    # sem controller, o agente não tem a ação search_project_tools para chamar
+    # e veria títulos sem poder buscar detalhes. Nesse caso usa code_context como fallback.
+    _effective_titles = tool_call_titles if controller is not None else None
+    task_text = build_task(title, preview_url, criteria, project_name, knowledge, skills, description, site_cache=site_cache, code_context=code_context, site_map=site_map, max_steps=max_steps, tool_call_titles=_effective_titles)
 
     # Imagens disponíveis para o agente fazer upload quando necessário
     import glob as _glob
@@ -631,7 +651,7 @@ async def run_qa_agent(
     # Navega para a URL apenas na primeira execução — retries reutilizam o estado atual do browser
     initial_actions = [] if _no_initial_navigate else [{'navigate': {'url': preview_url}}]
 
-    agent = Agent(
+    _agent_kwargs = dict(
         task=task_text,
         llm=llm,
         browser_session=session,
@@ -643,6 +663,14 @@ async def run_qa_agent(
         available_file_paths=image_paths,
         initial_actions=initial_actions,
     )
+    if controller is not None:
+        _agent_kwargs['controller'] = controller
+    try:
+        agent = Agent(**_agent_kwargs)
+    except TypeError:
+        # Versão do browser-use sem suporte a controller — fallback sem ele
+        _agent_kwargs.pop('controller', None)
+        agent = Agent(**_agent_kwargs)
 
     def log_token_summary():
         _t_end   = time.time()

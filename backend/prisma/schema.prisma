@@ -113,3 +113,18 @@ model AIKnowledge {
 
   @@unique([type, name])
 }
+
+model ProjectToolCall {
+  id          String   @id @default(cuid())
+  projectName String
+  topic       String   // ex: "auth/login", "products/create"
+  title       String   // ex: "Login com Email e Senha"
+  description String   @default("") // resumo curto (1 frase) para busca
+  content     String   // detalhes relevantes para QA (endpoints, campos, regras)
+  source      String   @default("") // arquivo de origem ex: "src/auth/loginService.js"
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([projectName, topic])
+  @@index([projectName])
+}
