@@ -564,6 +564,9 @@ async def run_qa_agent(
     site_cache: str = None,
     code_context: str = None,
     site_map: str = None,
+    _external_session=None,          # sessão externa — não cria nem fecha o browser
+    _no_initial_navigate: bool = False,  # pula navegação inicial (retry com mesmo browser)
+    step_extension_callback=None,    # async fn() -> int|None — pergunta mais steps ao analista
 ) -> dict:
     import tempfile, shutil
 
@@ -583,13 +586,16 @@ async def run_qa_agent(
 
     llm, model_name = build_llm(cerebras_api_key=cerebras_api_key)
 
-    # Diretório temporário isolado para cada execução.
-    # Garante que cookies, localStorage e sessões do Chromium são 100% descartados
-    # ao final — sem vazamento de credenciais entre testes ou entre usuários diferentes.
-    temp_profile_dir = tempfile.mkdtemp(prefix='nocorp_qa_')
-    session = BrowserSession(
-        browser_profile=BrowserProfile(headless=headless, user_data_dir=temp_profile_dir)
-    )
+    # Sessão do browser — cria uma nova ou reutiliza uma externa (para retries sem fechar o browser)
+    if _external_session is not None:
+        temp_profile_dir = None   # não gerenciado aqui
+        session = _external_session
+    else:
+        # Diretório temporário isolado — cookies/localStorage descartados ao final
+        temp_profile_dir = tempfile.mkdtemp(prefix='nocorp_qa_')
+        session = BrowserSession(
+            browser_profile=BrowserProfile(headless=headless, user_data_dir=temp_profile_dir)
+        )
 
     task_text = build_task(title, preview_url, criteria, project_name, knowledge, skills, description, site_cache=site_cache, code_context=code_context, site_map=site_map, max_steps=max_steps)
 
@@ -622,8 +628,8 @@ async def run_qa_agent(
             f.write(_make_png())
     image_paths.append(dummy_path)
 
-    # Abre a URL automaticamente ANTES do loop do agente (não conta como navegação)
-    initial_actions = [{'navigate': {'url': preview_url}}]
+    # Navega para a URL apenas na primeira execução — retries reutilizam o estado atual do browser
+    initial_actions = [] if _no_initial_navigate else [{'navigate': {'url': preview_url}}]
 
     agent = Agent(
         task=task_text,
@@ -674,8 +680,45 @@ async def run_qa_agent(
     console_task = asyncio.create_task(_attach_console_listeners(session, console_logs))
 
     try:
-        print(f"[QA Agent] 🔢 Max steps: {max_steps}")
-        history = await agent.run(max_steps=max_steps)
+        # ── Loop: suporta extensão de steps com browser aberto ────────────
+        _steps_now   = max_steps
+        _first_run   = True
+        history      = None
+
+        while True:
+            print(f"[QA Agent] 🔢 Executando: {_steps_now} steps")
+            history = await agent.run(max_steps=_steps_now)
+
+            # Verifica se o agente concluiu normalmente (chamou done())
+            _raw_final = None
+            if hasattr(history, 'final_result') and callable(history.final_result):
+                _raw_final = history.final_result()
+
+            if bool(_raw_final) or step_extension_callback is None:
+                break  # concluído ou sem callback — aceita resultado
+
+            # Steps esgotados sem done() — limpa initial_actions p/ não re-navegar
+            if _first_run:
+                if hasattr(agent, 'initial_actions'):
+                    agent.initial_actions = []
+                _first_run = False
+
+            # Pergunta mais steps ao analista (callback fica no worker.py)
+            extra = await step_extension_callback()
+            if extra and isinstance(extra, int) and extra > 0:
+                _steps_now = extra
+                continue
+
+            # Analista usou /end — encerra e retorna end_requested
+            log_token_summary()
+            return {
+                "success":      False,
+                "report":       "Teste encerrado pelo analista (/end após steps esgotados).",
+                "steps":        len(history.history) if hasattr(history, 'history') else 0,
+                "tokens_total": llm._tokens_total,
+                "cache_update": None,
+                "end_requested": True,
+            }
 
         log_token_summary()
 
@@ -738,14 +781,13 @@ async def run_qa_agent(
         except (asyncio.CancelledError, Exception):
             pass
 
-        # Para o browser
-        try:
-            await session.stop()
-        except Exception:
-            pass
-        # Apaga o perfil temporário — remove cookies, localStorage, sessões e
-        # qualquer credencial que o Chromium tenha armazenado durante o teste.
-        try:
-            shutil.rmtree(temp_profile_dir, ignore_errors=True)
-        except Exception:
-            pass
+        # Fecha o browser APENAS se foi criado aqui — sessão externa é responsabilidade do caller
+        if _external_session is None:
+            try:
+                await session.stop()
+            except Exception:
+                pass
+            try:
+                shutil.rmtree(temp_profile_dir, ignore_errors=True)
+            except Exception:
+                pass

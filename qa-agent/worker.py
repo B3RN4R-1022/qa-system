@@ -33,7 +33,7 @@ from agent import run_qa_agent
 import pathlib as _pathlib
 load_dotenv(_pathlib.Path(__file__).parent / '.env', override=True)
 
-LOCAL_VERSION = "1.4.5"
+LOCAL_VERSION = "1.4.6"
 
 # Corrige CEREBRAS_MODEL imediatamente se .env tiver modelo desatualizado.
 # Garante que mesmo sem auto-update o modelo certo é usado na sessão atual.
@@ -1037,135 +1037,195 @@ async def _run_single_criterion(
     client, backend_url, headers, task_id, job_type,
 ) -> dict:
     """
-    Executa UM único critério de aceitação como sessão de agente independente.
-    Se o critério falhar, pede dica ao analista e tenta novamente (só ele).
+    Executa UM critério. O browser permanece ABERTO durante prompts de dica ou
+    extensão de steps — só fecha quando o critério conclui ou o analista digita /end.
+
     Retorna: {criterion, passed, approved_detail, failed_detail, warning,
-              cache_update, tokens, cancelled}
+              cache_update, tokens, cancelled, end_requested}
     """
-    info("Abrindo Chromium — aguarde...")
-    print()
+    import tempfile as _tmpfile, shutil as _shutil
+    from browser_use.browser.profile import BrowserProfile
+    from browser_use.browser.session import BrowserSession
 
-    agent_task  = asyncio.create_task(run_qa_agent(
-        title=f"{job['title']} [Crit. {criterion_idx+1}/{len(all_criteria)}]",
-        preview_url=job['preview_url'],
-        criteria=[criterion],
-        project_name=job.get('project_name', ''),
-        description=job.get('description', ''),
-        knowledge=job.get('knowledge', ''),
-        skills=job.get('skills', ''),
-        headless=test_headless,
-        cerebras_api_key=cerebras_key,
-        site_cache=site_cache,
-        code_context=repo_cache_context,
-        site_map=site_map_context,
-        max_steps=max_steps,
-    ))
-    timer_task  = asyncio.create_task(_live_timer(f"Crit. {criterion_idx+1}: {criterion[:30]}"))
-    cancel_task = asyncio.create_task(
-        _watch_cancellation(client, backend_url, headers, task_id, job_type)
+    # Cria sessão aqui para reutilizá-la entre tentativas sem fechar o browser
+    temp_dir = _tmpfile.mkdtemp(prefix='nocorp_qa_')
+    session  = BrowserSession(
+        browser_profile=BrowserProfile(headless=test_headless, user_data_dir=temp_dir)
     )
+    _timer_paused = asyncio.Event()
 
-    try:
-        done, pending = await asyncio.wait(
-            {agent_task, cancel_task},
-            return_when=asyncio.FIRST_COMPLETED,
-        )
-        for t in pending:
-            t.cancel()
-            try:
-                await t
-            except (asyncio.CancelledError, Exception):
-                pass
-    finally:
-        timer_task.cancel()
-        try:
-            await timer_task
-        except asyncio.CancelledError:
-            pass
+    # ── Callback: pergunta mais steps quando esgotam (browser fica aberto) ──
+    async def _step_ext_cb() -> int | None:
+        _timer_paused.set()
         _clear_line()
+        print()
+        print("  ─────────────────────────────────────────────")
+        info(f"⏸  Steps esgotados — Critério {criterion_idx+1}/{len(all_criteria)}")
+        info("O browser está ABERTO — você pode ver o estado atual.")
+        print()
+        while True:
+            raw = input("  Steps adicionais (número · /end para encerrar): ").strip()
+            if raw.lower() == '/end':
+                _timer_paused.clear()
+                return None   # None = /end = encerra
+            if raw.isdigit() and int(raw) > 0:
+                n = int(raw)
+                info(f"▶  Continuando com {n} steps adicionais...")
+                print()
+                _timer_paused.clear()
+                return n
+            info("Digite um número de steps ou /end.")
 
-    # Cancelado pelo usuário
-    if cancel_task in done and agent_task not in done:
-        return {'criterion': criterion, 'passed': False, 'cancelled': True,
-                'cache_update': None, 'tokens': 0}
+    # ── Executa uma tentativa do agente (reutiliza sessão) ──────────────────
+    async def _run_attempt(title_sfx: str, desc: str, no_nav: bool):
+        _timer_paused.clear()
+        _at = asyncio.create_task(run_qa_agent(
+            title=f"{job['title']} {title_sfx}",
+            preview_url=job['preview_url'],
+            criteria=[criterion],
+            project_name=job.get('project_name', ''),
+            description=desc,
+            knowledge=job.get('knowledge', ''),
+            skills=job.get('skills', ''),
+            headless=test_headless,
+            cerebras_api_key=cerebras_key,
+            site_cache=site_cache,
+            code_context=repo_cache_context,
+            site_map=site_map_context,
+            max_steps=max_steps,
+            _external_session=session,
+            _no_initial_navigate=no_nav,
+            step_extension_callback=_step_ext_cb,
+        ))
+        _tt = asyncio.create_task(
+            _live_timer(f"Crit. {criterion_idx+1}: {criterion[:30]}", pause_event=_timer_paused)
+        )
+        _ct = asyncio.create_task(
+            _watch_cancellation(client, backend_url, headers, task_id, job_type)
+        )
+        try:
+            done, pending = await asyncio.wait({_at, _ct}, return_when=asyncio.FIRST_COMPLETED)
+            for t in pending:
+                t.cancel()
+                try: await t
+                except (asyncio.CancelledError, Exception): pass
+        finally:
+            _tt.cancel()
+            try: await _tt
+            except asyncio.CancelledError: pass
+            _clear_line()
 
-    # Lê resultado do agente
+        if _ct in done and _at not in done:
+            return {'cancelled': True}
+        try:
+            return _at.result()
+        except Exception as exc:
+            return {'success': False, 'report': f'Erro: {exc}', 'tokens_total': 0, 'cache_update': None}
+
+    # ── Loop principal: roda → se falhou → pede dica → roda de novo ────────
     try:
-        result = agent_task.result()
-    except Exception as e:
-        result = {'success': False, 'report': f'Erro inesperado: {e}',
-                  'tokens_total': 0, 'cache_update': None}
+        info("Abrindo Chromium — aguarde...")
+        print()
 
-    report       = result.get('report', '')
-    tokens       = result.get('tokens_total', 0) or 0
-    cache_update = result.get('cache_update')
-    passed       = _criterion_passed(report)
-    approved_detail, failed_detail, warning = _extract_criterion_detail(report)
+        total_tokens     = 0
+        cache_update     = None
+        current_desc     = job.get('description', '')
+        no_nav           = False   # primeira run: navega; retries: browser já está dentro
+        attempt          = 0
+        passed           = False
+        approved_detail  = failed_detail = warning = ''
+        report           = ''
 
-    # Se falhou, pede dica e retenta só este critério
-    if not passed:
-        hint, _, end_requested = _ask_analyst_hint(criterion, report)
-        if end_requested:
-            info("🛑 /end recebido — encerrando teste aqui.")
-            return {
-                'criterion':       criterion,
-                'passed':          passed,
-                'approved_detail': approved_detail,
-                'failed_detail':   failed_detail,
-                'warning':         warning,
-                'cache_update':    cache_update,
-                'tokens':          tokens,
-                'cancelled':       False,
-                'end_requested':   True,
-            }
-        if hint:
+        while True:
+            sfx    = (f"[Crit. {criterion_idx+1}/{len(all_criteria)}]"
+                      if attempt == 0 else
+                      f"[Crit. {criterion_idx+1} — retry {attempt}]")
+            result = await _run_attempt(sfx, current_desc, no_nav)
+
+            # Cancelado pelo frontend
+            if result.get('cancelled'):
+                return {'criterion': criterion, 'passed': False, 'cancelled': True,
+                        'end_requested': False, 'cache_update': cache_update, 'tokens': total_tokens}
+
+            # /end após steps esgotados
+            if result.get('end_requested'):
+                return {'criterion': criterion, 'passed': False, 'cancelled': False,
+                        'end_requested': True, 'cache_update': cache_update, 'tokens': total_tokens,
+                        'approved_detail': '', 'failed_detail': '', 'warning': ''}
+
+            total_tokens += result.get('tokens_total', 0) or 0
+            if result.get('cache_update'):
+                cache_update = result['cache_update']
+
+            report  = result.get('report', '')
+            passed  = _criterion_passed(report)
+            approved_detail, failed_detail, warning = _extract_criterion_detail(report)
+
+            if passed:
+                break   # ✅ aprovado — fecha browser e retorna
+
+            # ── Critério falhou: browser ABERTO — pede dica ────────────────
+            _timer_paused.set()
+            _clear_line()
+            print()
+            print("  ─────────────────────────────────────────────")
+            info(f"⚠️  Critério {criterion_idx+1} falhou — browser ABERTO")
+
+            if report:
+                print()
+                for line in report.split('\n')[:8]:
+                    if line.strip():
+                        print(f"     {line.strip()[:90]}")
+
+            approved_so_far = _extract_approved_from_report(report)
+            if approved_so_far:
+                print()
+                info("Já verificado com sucesso:")
+                for a in approved_so_far:
+                    print(f"     ✅ {a}")
+
+            print()
+            info("Digite uma dica para o agente, ou /end para encerrar o teste.")
+            info("Exemplos: 'O botão Salvar está no rodapé da página'")
+            info("          'Após salvar aparece um toast verde'")
+            print()
+
+            hint = ''
+            while True:
+                hint = input("  Dica (ou /end): ").strip()
+                if hint.lower() == '/end':
+                    return {'criterion': criterion, 'passed': False, 'cancelled': False,
+                            'end_requested': True, 'cache_update': cache_update,
+                            'tokens': total_tokens, 'approved_detail': approved_detail,
+                            'failed_detail': failed_detail, 'warning': warning}
+                if hint:
+                    break
+                info("Digite uma dica ou /end.")
+
+            attempt     += 1
+            no_nav       = True   # browser já está dentro do app — não navega de volta
+            current_desc = job.get('description', '') + f"\n\n## DICA DO ANALISTA (tentativa {attempt}):\n{hint}"
             info(f"🔄 Retentando critério {criterion_idx+1} com a dica...")
             print()
-            extra_ctx = f"\n\n## DICA DO ANALISTA — leia antes de começar:\n{hint}\n"
 
-            retry_task = asyncio.create_task(run_qa_agent(
-                title=f"{job['title']} [Crit. {criterion_idx+1} — retry]",
-                preview_url=job['preview_url'],
-                criteria=[criterion],
-                project_name=job.get('project_name', ''),
-                description=job.get('description', '') + extra_ctx,
-                knowledge=job.get('knowledge', ''),
-                skills=job.get('skills', ''),
-                headless=test_headless,
-                cerebras_api_key=cerebras_key,
-                site_cache=site_cache,
-                code_context=repo_cache_context,
-                site_map=site_map_context,
-                max_steps=max_steps + 5,
-            ))
-            timer2 = asyncio.create_task(_live_timer(f"[Retry] Crit. {criterion_idx+1}"))
-            try:
-                retry_result   = await retry_task
-                retry_report   = retry_result.get('report', '')
-                passed         = _criterion_passed(retry_report)
-                approved_detail, failed_detail, warning = _extract_criterion_detail(retry_report)
-                tokens        += retry_result.get('tokens_total', 0) or 0
-                cache_update   = retry_result.get('cache_update') or cache_update
-            except Exception as e2:
-                info(f"Retry do critério {criterion_idx+1} falhou: {e2}")
-            finally:
-                timer2.cancel()
-                try:
-                    await timer2
-                except asyncio.CancelledError:
-                    pass
-                _clear_line()
+        return {
+            'criterion':       criterion,
+            'passed':          passed,
+            'approved_detail': approved_detail,
+            'failed_detail':   failed_detail,
+            'warning':         warning,
+            'cache_update':    cache_update,
+            'tokens':          total_tokens,
+            'cancelled':       False,
+            'end_requested':   False,
+        }
 
-    return {
-        'criterion':       criterion,
-        'passed':          passed,
-        'approved_detail': approved_detail,
-        'failed_detail':   failed_detail,
-        'warning':         warning,
-        'cache_update':    cache_update,
-        'tokens':          tokens,
-        'cancelled':       False,
-    }
+    finally:
+        # Browser fecha AQUI — mantido aberto durante todo o processo acima
+        try: await session.stop()
+        except Exception: pass
+        try: _shutil.rmtree(temp_dir, ignore_errors=True)
+        except Exception: pass
 
 
 def _clear_line():
@@ -1401,16 +1461,17 @@ def ensure_cerebras_key(session_data):
 
 # ─── Timer ao vivo durante execução ───────────────────────────────────────────
 
-async def _live_timer(title):
+async def _live_timer(title, pause_event: asyncio.Event = None):
     start = time.time()
     spin  = 0
     short = title[:35] + '…' if len(title) > 35 else title
     try:
         while True:
-            elapsed = int(time.time() - start)
-            m, s = divmod(elapsed, 60)
-            _spin(spin, f"Analisando: {short}  [{m:02d}:{s:02d}]")
-            spin += 1
+            if pause_event is None or not pause_event.is_set():
+                elapsed = int(time.time() - start)
+                m, s = divmod(elapsed, 60)
+                _spin(spin, f"Analisando: {short}  [{m:02d}:{s:02d}]")
+                spin += 1
             await asyncio.sleep(0.3)
     except asyncio.CancelledError:
         pass
