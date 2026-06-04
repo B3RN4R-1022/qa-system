@@ -107,6 +107,8 @@ const EMPTY_FORM = {
   expectedBehavior: '',
   criteria: [''],
   notes: '',
+  loginEmail: '',
+  loginPassword: '',
 }
 
 const PROJECT_TYPES = [
@@ -298,12 +300,37 @@ function TestForm({ form, onChange, onSubmit, onCancel, submitting, formError, e
           />
         </div>
 
+        {/* Credenciais de login */}
+        <div>
+          <label className="text-xs font-medium text-gray-500 dark:text-gray-400 block mb-1">
+            Credenciais de login
+            <span className="text-gray-400 font-normal ml-1">(sobrepõe o cache — use quando mudaram)</span>
+          </label>
+          <div className="grid grid-cols-2 gap-2">
+            <input
+              className={inp}
+              placeholder="Email"
+              autoComplete="off"
+              value={form.loginEmail}
+              onChange={e => onChange('loginEmail', e.target.value)}
+            />
+            <input
+              className={inp}
+              type="password"
+              placeholder="Senha"
+              autoComplete="new-password"
+              value={form.loginPassword}
+              onChange={e => onChange('loginPassword', e.target.value)}
+            />
+          </div>
+        </div>
+
         {/* Notas */}
         <div>
           <label className="text-xs font-medium text-gray-500 dark:text-gray-400 block mb-1">Notas adicionais</label>
           <textarea
             className={`${inp} resize-none`}
-            placeholder="Credenciais de teste, ambientes, cuidados especiais…"
+            placeholder="Ambientes, cuidados especiais…"
             rows={2}
             value={form.notes}
             onChange={e => onChange('notes', e.target.value)}
@@ -713,13 +740,15 @@ export default function Chat() {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          title:        qaForm.title.trim(),
+          title:         qaForm.title.trim(),
           description,
-          previewUrl:   qaForm.previewUrl.trim(),
-          projectName:  qaForm.projectName.trim() || undefined,
+          previewUrl:    qaForm.previewUrl.trim(),
+          projectName:   qaForm.projectName.trim() || undefined,
           criteria,
-          projectType:  qaForm.projectType || undefined,
-          requestRemap: qaForm.requestRemap || undefined,
+          projectType:   qaForm.projectType || undefined,
+          requestRemap:  qaForm.requestRemap || undefined,
+          loginEmail:    qaForm.loginEmail.trim() || undefined,
+          loginPassword: qaForm.loginPassword.trim() || undefined,
         })
       })
       const data = await res.json()

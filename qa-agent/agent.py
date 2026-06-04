@@ -437,7 +437,7 @@ MAX_CODE_CHARS = 40_000   # máx para código-fonte no prompt
 MAX_MAP_CHARS  = 30_000   # máx para sitemap no prompt
 
 
-def build_task(title: str, preview_url: str, criteria: list, project_name: str, knowledge: str, skills: str, description: str = "", site_cache: str = None, code_context: str = None, site_map: str = None, max_steps: int = 15, tool_call_titles: list = None) -> str:
+def build_task(title: str, preview_url: str, criteria: list, project_name: str, knowledge: str, skills: str, description: str = "", site_cache: str = None, code_context: str = None, site_map: str = None, max_steps: int = 15, tool_call_titles: list = None, login_email: str = None, login_password: str = None) -> str:
     # Trunca seções variáveis grandes antes de montar o prompt
     # para não estourar o limite de 100k chars do browser-use
     _code = code_context
@@ -496,6 +496,27 @@ Este resumo foi gerado automaticamente a partir do código-fonte. Use-o para:
 {_code}
 """
 
+    # Seção de login — credenciais explícitas têm prioridade máxima sobre qualquer cache
+    if login_email or login_password:
+        _cred_lines = []
+        if login_email:
+            _cred_lines.append(f"- Use `input_text` no campo de email com: {login_email}")
+        if login_password:
+            _cred_lines.append(f"- Use `input_text` no campo de senha com: {login_password}")
+        _cred_block = "\n".join(_cred_lines)
+        login_step = f"""**PASSO 1 — LOGIN (a página de login já está carregada):**
+- Olhe os elementos interativos disponíveis na página atual
+{_cred_block}
+- Use `click_element` no botão de login/entrar
+- Aguarde o carregamento (NÃO navegue, apenas observe a próxima tela)
+⚠️ Credenciais acima têm PRIORIDADE ABSOLUTA — ignore qualquer login diferente no cache ou na memória."""
+    else:
+        login_step = """**PASSO 1 — LOGIN (se a página exigir):**
+- Olhe os elementos interativos disponíveis na página atual
+- Use as credenciais fornecidas na descrição ou na base de conhecimento do projeto
+- Use `click_element` no botão de login/entrar
+- Aguarde o carregamento (NÃO navegue, apenas observe a próxima tela)"""
+
     # Seção de cache de site — se existir, a IA pula exploração já conhecida
     cache_section = ""
     if site_cache:
@@ -505,9 +526,10 @@ Você já explorou este site antes. Use este mapa para ir direto ao ponto — n�
 {site_cache}
 
 Com base nisso:
-- Pule etapas de exploração que você já conhece (navegação, login, estrutura geral)
+- Pule etapas de exploração que você já conhece (navegação, estrutura de menus, rotas)
 - Vá diretamente à área relacionada ao teste atual
 - Apenas verifique rapidamente se algo mudou nessas áreas já mapeadas
+⚠️ Credenciais de login: SEMPRE use as do PASSO 1 abaixo — nunca use credenciais armazenadas no cache.
 """
 
     _prompt = f"""Você é um analista de QA testando o sistema da Nocorp.
@@ -557,12 +579,7 @@ Assim que tiver verificado TODOS os critérios, escreva o relatório e finalize 
 
 ## O que fazer passo a passo — SIGA EXATAMENTE ESTA ORDEM
 
-**PASSO 1 — LOGIN (a página de login já está carregada):**
-- Olhe os elementos interativos disponíveis na página atual
-- Use `input_text` no campo de email com: bernardo.michel@nocorp.io
-- Use `input_text` no campo de senha com: 123456
-- Use `click_element` no botão de login/entrar
-- Aguarde o carregamento (NÃO navegue, apenas observe a próxima tela)
+{login_step}
 
 **PASSO 2 — NAVEGUE ATÉ A FUNCIONALIDADE:**
 - Confirme que o login funcionou (área interna carregada)
@@ -681,6 +698,8 @@ async def run_qa_agent(
     step_extension_callback=None,    # async fn() -> int|None — pergunta mais steps ao analista
     controller=None,                 # Controller do browser-use com tool calls personalizados
     tool_call_titles: list = None,   # índice da knowledge base (substitui code_context no prompt)
+    login_email: str = None,         # email de login para este teste (prioridade sobre cache)
+    login_password: str = None,      # senha de login para este teste (prioridade sobre cache)
 ) -> dict:
     import tempfile, shutil
 
@@ -715,7 +734,7 @@ async def run_qa_agent(
     # sem controller, o agente não tem a ação search_project_tools para chamar
     # e veria títulos sem poder buscar detalhes. Nesse caso usa code_context como fallback.
     _effective_titles = tool_call_titles if controller is not None else None
-    task_text = build_task(title, preview_url, criteria, project_name, knowledge, skills, description, site_cache=site_cache, code_context=code_context, site_map=site_map, max_steps=max_steps, tool_call_titles=_effective_titles)
+    task_text = build_task(title, preview_url, criteria, project_name, knowledge, skills, description, site_cache=site_cache, code_context=code_context, site_map=site_map, max_steps=max_steps, tool_call_titles=_effective_titles, login_email=login_email, login_password=login_password)
 
     # Imagens disponíveis para o agente fazer upload quando necessário
     import glob as _glob

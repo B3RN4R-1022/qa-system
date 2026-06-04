@@ -1282,8 +1282,10 @@ async def _run_single_criterion(
     site_cache, repo_cache_context, site_map_context,
     test_headless, max_steps,
     client, backend_url, headers, task_id, job_type,
-    controller=None,        # Controller do browser-use com search/save tool calls
-    tool_call_titles=None,  # índice da knowledge base para o prompt do agente
+    controller=None,         # Controller do browser-use com search/save tool calls
+    tool_call_titles=None,   # índice da knowledge base para o prompt do agente
+    login_email=None,        # credencial explícita — prioridade sobre cache
+    login_password=None,
 ) -> dict:
     """
     Executa UM critério. O browser permanece ABERTO durante prompts de dica ou
@@ -1347,6 +1349,8 @@ async def _run_single_criterion(
             step_extension_callback=_step_ext_cb,
             controller=controller,
             tool_call_titles=tool_call_titles,
+            login_email=login_email,
+            login_password=login_password,
         ))
         _tt = asyncio.create_task(
             _live_timer(f"Crit. {criterion_idx+1}: {criterion[:30]}", pause_event=_timer_paused)
@@ -1841,10 +1845,12 @@ async def _watch_cancellation(client, backend_url, headers, task_id, job_type):
 # ─── Execução de um job ───────────────────────────────────────────────────────
 
 async def run_job(client, backend_url, headers, job, cerebras_key):
-    task_id      = job["task_id"]
-    job_type     = job.get("type", "qa_task")
-    project_name = job.get("project_name", "")
-    site_cache   = job.get("site_cache")  # conhecimento prévio do site (pode ser None)
+    task_id       = job["task_id"]
+    job_type      = job.get("type", "qa_task")
+    project_name  = job.get("project_name", "")
+    site_cache    = job.get("site_cache")   # conhecimento prévio do site (pode ser None)
+    login_email   = job.get("login_email")  # credencial explícita — prioridade sobre cache
+    login_password = job.get("login_password")
 
     # Reivindica o job (queued → running)
     r = await client.post(
@@ -2030,6 +2036,8 @@ async def run_job(client, backend_url, headers, job, cerebras_key):
                 job_type=job_type,
                 controller=controller,
                 tool_call_titles=tool_call_titles,
+                login_email=login_email,
+                login_password=login_password,
             )
 
             if cr.get('cancelled'):
@@ -2094,6 +2102,8 @@ async def run_job(client, backend_url, headers, job, cerebras_key):
             max_steps=estimated_steps,
             controller=controller,
             tool_call_titles=tool_call_titles,
+            login_email=login_email,
+            login_password=login_password,
         ))
         timer_task  = asyncio.create_task(_live_timer(job["title"]))
         cancel_task = asyncio.create_task(
@@ -2166,6 +2176,8 @@ async def run_job(client, backend_url, headers, job, cerebras_key):
                     code_context=repo_cache_context,
                     site_map=site_map_context,
                     max_steps=estimated_steps + 5,
+                    login_email=login_email,
+                    login_password=login_password,
                 ))
                 timer2 = asyncio.create_task(_live_timer(f"[Retry] {job['title']}"))
                 try:

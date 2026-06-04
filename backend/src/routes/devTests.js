@@ -27,7 +27,7 @@ router.get('/', async (req, res) => {
 
 // POST /dev-tests — cria e enfileira novo teste
 router.post('/', async (req, res) => {
-  const { title, description, previewUrl, projectName, criteria, projectType, requestRemap } = req.body || {}
+  const { title, description, previewUrl, projectName, criteria, projectType, requestRemap, loginEmail, loginPassword } = req.body || {}
   if (!title || !description || !previewUrl) {
     return res.status(400).json({ error: 'Título, descrição e URL são obrigatórios' })
   }
@@ -45,6 +45,8 @@ router.post('/', async (req, res) => {
         criteria: Array.isArray(criteria) && criteria.length > 0
           ? JSON.stringify(criteria.filter(c => c?.trim()))
           : null,
+        loginEmail: loginEmail?.trim() || null,
+        loginPassword: loginPassword?.trim() || null,
         status: 'queued',
       }
     })
@@ -121,21 +123,25 @@ router.post('/:id/cancel', async (req, res) => {
   }
 })
 
-// POST /dev-tests/:id/rerun — re-enfileira um teste já concluído ou com erro
+// POST /dev-tests/:id/rerun — re-enfileira com credenciais opcionais novas
 router.post('/:id/rerun', async (req, res) => {
+  const { loginEmail, loginPassword } = req.body || {}
   try {
     const test = await prisma.devTest.findUnique({ where: { id: req.params.id } })
     if (!test) return res.status(404).json({ error: 'Teste não encontrado' })
     if (req.user.role === 'dev' && test.userId !== req.user.id) {
       return res.status(403).json({ error: 'Sem permissão' })
     }
-    // Só permite re-run em testes finalizados (não re-fila o que já está na fila)
     if (test.status === 'queued' || test.status === 'running') {
       return res.status(400).json({ error: 'Teste já está em execução' })
     }
+    const updateData = { status: 'queued', report: null, tokensUsed: null, userId: req.user.id }
+    // Sobrescreve credenciais se fornecidas; null limpa as existentes
+    if (loginEmail !== undefined) updateData.loginEmail = loginEmail?.trim() || null
+    if (loginPassword !== undefined) updateData.loginPassword = loginPassword?.trim() || null
     const updated = await prisma.devTest.update({
       where: { id: req.params.id },
-      data: { status: 'queued', report: null, tokensUsed: null, userId: req.user.id },
+      data: updateData,
       include: { user: { select: { name: true, email: true } } }
     })
     res.json(updated)

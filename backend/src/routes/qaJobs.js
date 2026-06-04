@@ -148,6 +148,8 @@ router.get('/pending', async (req, res) => {
         pending_remap: repoConfig.pendingRemap || false,
         crawl_headless: repoConfig.crawlHeadless !== false,
         tool_call_titles: (toolCalls || []).map(t => `[${t.topic}] ${t.title}: ${t.description}`),
+        login_email: winner.loginEmail || null,
+        login_password: winner.loginPassword || null,
       })
     }
   } catch (err) {

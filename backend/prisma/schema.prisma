@@ -67,19 +67,21 @@ model User {
 }
 
 model DevTest {
-  id          String   @id @default(cuid())
-  userId      String
-  user        User     @relation(fields: [userId], references: [id])
-  title       String
-  description String
-  previewUrl  String
-  projectName String?
-  criteria    String?  // JSON: ["critério 1", "critério 2"]
-  status      String   @default("queued")  // 'queued' | 'running' | 'done' | 'error'
-  report      String?
-  tokensUsed  Int?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id            String   @id @default(cuid())
+  userId        String
+  user          User     @relation(fields: [userId], references: [id])
+  title         String
+  description   String
+  previewUrl    String
+  projectName   String?
+  criteria      String?  // JSON: ["critério 1", "critério 2"]
+  loginEmail    String?  // credencial de login para este teste
+  loginPassword String?  // senha de login para este teste
+  status        String   @default("queued")  // 'queued' | 'running' | 'done' | 'error'
+  report        String?
+  tokensUsed    Int?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 }
 
 model ChatMessage {

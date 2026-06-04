@@ -56,6 +56,9 @@ function TestCard({ test, onDelete, onRerun, onCancel, isQA }) {
   const [deleting, setDeleting] = useState(false)
   const [rerunning, setRerunning] = useState(false)
   const [cancelling, setCancelling] = useState(false)
+  const [showRerunForm, setShowRerunForm] = useState(false)
+  const [rerunEmail, setRerunEmail] = useState('')
+  const [rerunPassword, setRerunPassword] = useState('')
 
   const isActive = test.status === 'queued' || test.status === 'running'
   const isFinished = test.status === 'done' || test.status === 'error'
@@ -91,14 +94,21 @@ function TestCard({ test, onDelete, onRerun, onCancel, isQA }) {
   async function handleRerun() {
     setRerunning(true)
     try {
+      const body = {}
+      if (rerunEmail.trim()) body.loginEmail = rerunEmail.trim()
+      if (rerunPassword.trim()) body.loginPassword = rerunPassword.trim()
       const res = await fetch(`${API}/dev-tests/${test.id}/rerun`, {
         method: 'POST',
-        headers: { 'Authorization': `Bearer ${token}` }
+        headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
       })
       const data = await res.json()
       if (res.ok) {
         onRerun(data)
         setExpanded(false)
+        setShowRerunForm(false)
+        setRerunEmail('')
+        setRerunPassword('')
       }
     } catch {}
     finally { setRerunning(false) }
@@ -206,9 +216,9 @@ function TestCard({ test, onDelete, onRerun, onCancel, isQA }) {
             )}
             {isFinished && (
               <button
-                onClick={handleRerun}
+                onClick={() => setShowRerunForm(f => !f)}
                 disabled={rerunning}
-                title="Re-executar este teste com os mesmos dados"
+                title="Re-executar este teste (com opção de novas credenciais)"
                 className="text-xs text-violet-500 hover:text-violet-700 dark:hover:text-violet-300 px-2 py-1 rounded-lg border border-violet-200 dark:border-violet-800 hover:bg-violet-50 dark:hover:bg-violet-900/10 disabled:opacity-50 transition-colors flex items-center gap-1"
               >
                 {rerunning ? (
@@ -231,6 +241,49 @@ function TestCard({ test, onDelete, onRerun, onCancel, isQA }) {
           </div>
         </div>
       </div>
+
+      {/* Formulário inline de re-execução com credenciais */}
+      {showRerunForm && isFinished && (
+        <div className="border-t border-violet-100 dark:border-violet-900/40 bg-violet-50 dark:bg-violet-900/10 px-4 py-3">
+          <p className="text-[11px] font-medium text-violet-700 dark:text-violet-400 mb-2">
+            Credenciais para esta execução
+            <span className="text-violet-500 font-normal ml-1">(deixe em branco para manter as anteriores)</span>
+          </p>
+          <div className="grid grid-cols-2 gap-2 mb-2">
+            <input
+              type="text"
+              placeholder="Email"
+              autoComplete="off"
+              value={rerunEmail}
+              onChange={e => setRerunEmail(e.target.value)}
+              className="text-xs bg-white dark:bg-gray-800 border border-violet-200 dark:border-violet-800 rounded-lg px-2.5 py-1.5 text-gray-900 dark:text-gray-100 placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-violet-400"
+            />
+            <input
+              type="password"
+              placeholder="Senha"
+              autoComplete="new-password"
+              value={rerunPassword}
+              onChange={e => setRerunPassword(e.target.value)}
+              className="text-xs bg-white dark:bg-gray-800 border border-violet-200 dark:border-violet-800 rounded-lg px-2.5 py-1.5 text-gray-900 dark:text-gray-100 placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-violet-400"
+            />
+          </div>
+          <div className="flex gap-2">
+            <button
+              onClick={handleRerun}
+              disabled={rerunning}
+              className="flex-1 py-1.5 rounded-lg bg-violet-600 hover:bg-violet-700 disabled:opacity-60 text-white text-xs font-semibold transition-colors"
+            >
+              {rerunning ? 'Enfileirando...' : 'Confirmar re-execução'}
+            </button>
+            <button
+              onClick={() => { setShowRerunForm(false); setRerunEmail(''); setRerunPassword('') }}
+              className="px-3 py-1.5 rounded-lg border border-gray-200 dark:border-gray-700 text-xs text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
+            >
+              Cancelar
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Relatório expandido */}
       {expanded && test.report && (
