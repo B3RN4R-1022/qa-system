@@ -14,7 +14,7 @@ sugerir alteração — acionando os botões nativos de aprovação do Asana.
 - **Auth:** JWT (30d) + TOTP 2FA (Google Authenticator) via speakeasy/qrcode + bcrypt + cookie-parser
 - **Integração:** Asana REST API + Webhooks (via `fetch` nativo, NÃO SDK — tem `hasOwnProperty` errors)
 - **IA Chat:** **Cerebras** (`gpt-oss-120b`, fallback `zai-glm-4.7`) via REST API — 1M tokens/dia. Lê a key do banco (mesma do QA Agent). **Migrado do Groq.**
-- **IA QA Agent:** Python local + browser-use 0.12.9 + Playwright (Chromium) + Cerebras (primário)
+- **IA QA Agent:** Python local + browser-use 0.12.9 + Playwright (Chromium) + Cerebras (primário) / **SambaNova** (alternativo, sem fila de 60s)
 - **Deploy:** Render (backend) + Vercel (frontend)
 - **Repositório:** https://github.com/B3RN4R-1022/qa-system (público — necessário para o installer)
 
@@ -96,6 +96,7 @@ sugerir alteração — acionando os botões nativos de aprovação do Asana.
   - `project_repo` / `<projeto>` — config do projeto (JSON): `repoPath`, `lastCommit`, `analyzedAt`, `fileCount`, `projectType`, `pendingRemap`
   - `repo_cache` / `<projeto>` — **resumo QA do repositório** gerado pela Cerebras (JSON estruturado: rotas, features, auth, endpoints, regras de negócio). Não armazena código bruto.
   - `wix_sitemap` / `<projeto>` — mapa do site Wix Velo (JSON: baseUrl, pageCount, pages{})
+- **ProjectToolCall** — knowledge base por projeto (nova, v1.4.7). Campos: `projectName`, `topic` (ex: `auth/login`), `title`, `description`, `content` (detalhes para QA), `source` (arquivo origem). Chave única: `[projectName, topic]`. Gerada automaticamente a partir do código-fonte do repo (lotes de 3 arquivos → Cerebras) ou descoberta pelo agente durante testes Wix (`source: agent_discovery`).
 - **AIReport** — relatório do agente por task. Campos: taskId (unique), **userId** (novo — quem enfileirou, para isolamento de fila), status, report, tokensUsed
 - **DevTest** — teste manual iniciado por dev. Campos: userId, title, description, previewUrl, projectName, criteria (JSON), status, report, tokensUsed
 
@@ -131,6 +132,10 @@ sugerir alteração — acionando os botões nativos de aprovação do Asana.
 - `GET|PUT|DELETE /projects/:name/repo-cache` — **resumo QA do repositório** (DELETE também limpa lastCommit para forçar re-análise)
 - `GET|PUT|DELETE /projects/:name/sitemap` — mapa Wix Velo
 - `GET|DELETE /projects/:name/cache` — cache de UI
+- `GET /projects/:name/tools?q=query` — lista tool calls (topic+title+description); `?topic=X` retorna um completo (com content)
+- `POST /projects/:name/tools` — cria/atualiza tool call (upsert por topic)
+- `DELETE /projects/:name/tools[?topic=X]` — remove um topic ou todos do projeto
+- `/qa-jobs/pending` — agora inclui `tool_call_titles` pré-carregados no payload
 
 ---
 
@@ -177,19 +182,20 @@ Frontend polling /ai-report ou /dev-tests/:id a cada 4s → exibe relatório
 3. **skills** — instruções gerais de QA
 4. **knowledge** — base de conhecimento do projeto
 5. **site_map** — mapa Wix Velo (navegação completa, formulários, botões por página)
-6. **code_context** — **resumo QA do repo** gerado pela Cerebras (não código bruto)
-7. **site_cache** — o que o agente aprendeu em testes anteriores
-8. **max_steps** — orçamento de steps visível no prompt ("Você tem X steps")
+6. **tool_call_titles** *(v1.4.7, prioridade sobre code_context)* — índice compacto da knowledge base: `[topic] title: description` por linha. Agente usa `search_project_tools(query)` para buscar detalhes sob demanda. Só ativo quando Controller está disponível.
+7. **code_context** — **resumo QA do repo** (fallback quando sem tool_call_titles)
+8. **site_cache** — o que o agente aprendeu em testes anteriores
+9. **max_steps** — orçamento de steps visível no prompt ("Você tem X steps")
 + regras: nunca navegar, descartar credenciais, ao final emitir `🗃️ CACHE_UPDATE_START...END`
 
 ### Arquivos qa-agent/
 
 | Arquivo | Descrição |
 |---------|-----------|
-| `worker.py` | **v1.4.6.** Login terminal, spinner/timer, loop de jobs, watcher de cancelamento. Auto-update (baixa só .py ao iniciar, reinicia sozinho). Menu de configurações ao iniciar (trocar usuário, trocar chave Cerebras). `estimate_steps_for_test()` (Cerebras estima steps por teste, teto 50). `summarize_repo_for_qa()` + `update_repo_cache_with_diff()`. **Checkpoints por critério:** `_run_single_criterion()` (gerencia sessão externamente — browser fica aberto durante prompts). `_compile_final_report()`, `_criterion_passed()`, `_extract_criterion_detail()`. Prompt de dica: texto=retry, `/end`=encerra teste. Prompt de steps esgotados: número=continua, `/end`=encerra. `_live_timer()` com `pause_event` para parar spinner durante prompts. `_fix_env_model_now()` corrige `CEREBRAS_MODEL` desatualizado no `.env` ao iniciar. `_patch_env_model_on_update()` corrige no `.env` após auto-update. `load_dotenv` com caminho absoluto + `override=True`. |
+| `worker.py` | **v1.4.11.** Login terminal, spinner/timer, loop de jobs, watcher de cancelamento. Auto-update (baixa só .py ao iniciar, reinicia sozinho). **Menu de configurações ao iniciar: [1] trocar usuário, [2] trocar provider+chave** (submenu Cerebras/SambaNova, salva `AI_PROVIDER` + chave no `.env` automaticamente). `estimate_steps_for_test()`. `summarize_repo_for_qa()` + `update_repo_cache_with_diff()`. **Checkpoints por critério:** `_run_single_criterion()`. `_compile_final_report()`, `_criterion_passed()`, `_extract_criterion_detail()`. Prompt de dica e steps. `_live_timer()` com `pause_event`. `_fix_env_model_now()` + `_patch_env_model_on_update()`. **v1.4.7:** `generate_tool_calls_from_repo()` (lotes de 3 arquivos → Cerebras/SambaNova → tool calls), `build_tool_call_controller()` (ações `search_project_tools` + `save_project_tool` via browser-use Controller), `_get_tool_call_titles()`, `_save_tool_call()`. **v1.4.9:** `_llm_call()` multi-provider (Cerebras + SambaNova), `ensure_sambanova_key()`, `_update_env_sambanova_key()`, `_update_env_provider()`. |
 | `session.py` | Cross-platform: Windows=DPAPI, macOS=Keychain, Linux=chmod 600. |
-| `agent.py` | browser-use wrapper. `max_failures=3`, `max_actions_per_step=5`. Prompt com PASSO 2/3 genérico. Truncagem de `code_context` (40k) e `site_map` (30k). Modelo `gpt-oss-120b` (3000 tok/s, free tier). **`_external_session`**: reutiliza sessão existente sem fechar browser. **`_no_initial_navigate`**: pula navegação inicial em retries. **`step_extension_callback`**: loop interno de steps — o agente pede mais steps ao analista sem fechar browser, continua de onde parou no mesmo Agent. **`timing.log`**: log separado com tempo LLM vs tempo browser por step + resumo por teste. Guard `_UNAVAILABLE`: força `gpt-oss-120b` se `.env` tiver modelo fora do free tier. |
-| `version.txt` | Versão atual (`1.4.6`). **LOCAL_VERSION em worker.py SEMPRE deve bater com este arquivo.** |
+| `agent.py` | **v1.4.11.** browser-use wrapper. `max_failures=3`, `max_actions_per_step=5`. Prompt com PASSO 2/3 genérico. Truncagem de `code_context` (40k) e `site_map` (30k). **`build_llm` suporta:** `cerebras`, `sambanova` (novo), `deepseek`, `ollama`, `groq`. **v1.4.7:** `build_task` com `tool_call_titles` (índice compacto substitui code_context quando Controller disponível); `run_qa_agent` com `controller` + `tool_call_titles`; Agent criado com `controller` opcional via kwargs + TypeError fallback. `_effective_titles` = None quando controller é None (evita prompt com ações inexistentes). **v1.4.8:** `_fix_action_args()` — corrige nomes de ação antes da validação Pydantic: `input_text→input`, `element_index→index` (browser-use 0.12.9 renomeou internamente). `is_schema_error` no `ainvoke` captura ValidationError e retenta com `_invoke_clean_function_calling`. **`timing.log`**: log separado LLM vs browser por step. Guard `_UNAVAILABLE`. `_external_session`, `_no_initial_navigate`, `step_extension_callback`. |
+| `version.txt` | Versão atual (`1.4.11`). **LOCAL_VERSION em worker.py SEMPRE deve bater com este arquivo.** |
 | `install.ps1` | Windows: `irm .../install.ps1 \| iex`. Necessário só na primeira instalação. |
 | `install.sh` | macOS: `curl -fsSL .../install.sh \| bash`. |
 
@@ -212,13 +218,17 @@ curl -fsSL https://raw.githubusercontent.com/B3RN4R-1022/qa-system/master/qa-age
 
 ### Multi-provider LLM
 
-| Provider | Modelo | Limite | Uso |
-|----------|--------|--------|-----|
-| `cerebras` | gpt-oss-120b / zai-glm-4.7 | 1M tokens/dia grátis | **Padrão (agente + chat + estimativas + resumos)** |
-| `deepseek` | deepseek-reasoner | pago | Opcional |
-| `ollama` | qualquer modelo local | ilimitado | Requer hardware |
+| Provider | Modelo | Limite | Rate limit real | Uso |
+|----------|--------|--------|-----------------|-----|
+| `cerebras` | gpt-oss-120b / zai-glm-4.7 | 1M tokens/dia grátis | ~1 req/min (fila de 60s) | Padrão histórico |
+| `sambanova` | Meta-Llama-3.3-70B-Instruct | $5 crédito grátis | ~10 req/min (sem fila) | **Recomendado** |
+| `deepseek` | deepseek-reasoner | pago | — | Opcional |
+| `ollama` | qualquer modelo local | ilimitado | local | Requer hardware |
+| `groq` | llama-3.3-70b-versatile | 100K tokens/dia | 30 req/min | Fallback limitado |
 
-**Fallback automático:** se `gpt-oss-120b` retornar 429, troca para `zai-glm-4.7` sem reiniciar.
+**Fallback automático:** se modelo primário retornar 429, troca para fallback sem reiniciar.
+**Trocar provider:** pressionar `[2]` no menu inicial → escolher Cerebras ou SambaNova → cola a chave → salva automaticamente `AI_PROVIDER` + chave no `.env`.
+**Por que SambaNova:** Cerebras free tier causa fila de ~60s por requisição (rate limit ~1 req/min), fazendo cada step do agente demorar 61s. SambaNova não tem essa fila.
 
 ---
 
@@ -308,6 +318,12 @@ Fluxo para projetos `repo` e `wix_headless`:
 - **Modelos Cerebras free tier:** `llama3.1-8b` e `llama3.3-70b` retornam 404 no plano free. Usar `gpt-oss-120b` (3000 tok/s) ou `zai-glm-4.7` (fallback)
 - **PASSO 2/3 hardcoded:** o prompt original tinha instrução específica de "clique em cadastro/registro" — desperdiçava steps em testes não relacionados. Corrigido para instrução genérica baseada nos critérios
 - **Teste preso em "running":** worker morreu mas backend não sabe → botão "Parar" na página de testes reseta para error
+- **Cerebras rate limit 60s:** free tier limita ~1 req/min → steps alternam 1s (quota disponível) e 61s (espera janela resetar). Solução: usar SambaNova (`AI_PROVIDER=sambanova`)
+- **browser-use 0.12.9 renomeou ações:** `input_text` → `input`, parâmetro `index` (não `element_index`). LLM treinado em exemplos antigos gera nomes errados → Pydantic joga ~150 ValidationErrors. Corrigido por `_fix_action_args()` que traduz antes de `model_validate`
+- **SambaNova key não passava para build_llm:** `cerebras_api_key` não era usado no case `sambanova` do build_llm. Corrigido: `api_key = cerebras_api_key or os.getenv("SAMBANOVA_API_KEY")`
+- **_update_env_* não atualiza os.environ:** salvar no .env não basta para a sessão atual → necessário `os.environ['KEY'] = value` após escrever o arquivo
+- **tool_call_titles sem controller:** se Controller não carregou (versão antiga browser-use), mostrar o índice de tool calls no prompt confunde o agente (instrui ações que não existem). Guard: `_effective_titles = tool_call_titles if controller is not None else None`
+- **ProjectToolCall.topic com barras:** tópicos como `auth/login` não podem ir como path param em Express → usar query param `?topic=auth/login` com `decodeURIComponent`
 
 ---
 
@@ -361,6 +377,25 @@ Fluxo para projetos `repo` e `wix_headless`:
   - `_run_single_criterion` gerencia sessão externamente (cria/fecha o browser); retries reutilizam browser já aberto (sem re-login, estado preservado)
   - `_external_session` + `_no_initial_navigate` + `step_extension_callback` em `run_qa_agent`
   - Loop interno de steps: mesmo Agent, mesmo browser, sem re-navegar
+- [x] **v1.4.7 — ProjectToolCall: knowledge base com geração automática** — FEITO
+  - Tabela `ProjectToolCall` no banco (`projectName+topic` chave única)
+  - Endpoints: `GET|POST|DELETE /projects/:name/tools` (busca por `?q=` ou `?topic=`)
+  - `/qa-jobs/pending` inclui `tool_call_titles` pré-carregados
+  - `generate_tool_calls_from_repo()`: divide código por arquivo, filtra arquivos com lógica, lotes de 3 → Cerebras extrai JSON de tool calls
+  - `build_tool_call_controller()`: Controller browser-use com `search_project_tools(query)` e `save_project_tool(...)` usando HTTP para o backend
+  - `build_task()`: usa índice compacto de títulos em vez de 40k chars de código; fallback para `code_context` se sem tool calls ou sem Controller
+  - Proteção: `_effective_titles = None` quando controller é None (evita prompt com ações inexistentes)
+- [x] **v1.4.8 — fix ValidationError browser-use 0.12.9** — FEITO
+  - `_fix_action_args()`: traduz nomes de ação antes de `model_validate` (`input_text→input`, `element_index→index`)
+  - `is_schema_error` no `ainvoke`: captura ValidationError e retenta com `_invoke_clean_function_calling`
+  - Elimina ~150 ValidationErrors por step que desperdiçavam steps e contavam como falhas
+- [x] **v1.4.9–1.4.11 — SambaNova como provider alternativo** — FEITO
+  - `build_llm`: novo case `sambanova` (Meta-Llama-3.3-70B, $5 crédito grátis, sem fila de 60s)
+  - `_llm_call()` multi-provider substitui `_cerebras_call` (alias mantido)
+  - `ensure_sambanova_key()`, `_update_env_sambanova_key()`, `_update_env_provider()`
+  - Menu `[2]` agora pergunta qual provider (Cerebras/SambaNova) antes da chave e salva `AI_PROVIDER` no `.env` — sem editar arquivo manualmente
+  - Fix: `cerebras_api_key or os.getenv("SAMBANOVA_API_KEY")` no case sambanova do `build_llm`
+  - Fix: `os.environ['SAMBANOVA_API_KEY'] = new_key` em `_update_env_sambanova_key`
 
 ### Backlog (aguardando autorização)
 - [ ] Botão "Mapear" da página Projetos virar job independente `wix_map` (hoje só seta pendingRemap)
@@ -369,10 +404,5 @@ Fluxo para projetos `repo` e `wix_headless`:
 - [ ] Página de Conta (perfil do usuário, trocar senha)
 - [ ] Vision no agente (comparação visual)
 - [ ] Heartbeat do worker → auto-reset de testes presos após timeout (hoje: manual via botão Parar)
-- [ ] **ProjectToolCall — knowledge chunked por feature** (pipeline completo)
-  - Nova tabela: `projectName + topic + title + description + content + source`
-  - Pipeline automático para repos: regex (rotas/modelos) + Cerebras → chunks por feature
-  - Descoberta Wix: agente cria chunks durante testes (`source: wix_discovery`)
-  - Fallback: agente não acha → explora → cria novo chunk
-  - Agente recebe só lista de títulos; pede chunk quando precisar (tool calling real)
-  - Objetivo: reduzir contexto de 40k tokens → 2k base + chunks sob demanda
+- [ ] Forçar agrupamento máximo de ações no prompt (hoje `max_actions_per_step=5` permite mas não força — LLM às vezes usa 1-2 por step)
+- [ ] Adicionar Gemini Flash como provider (30 req/min grátis, 1M tokens/min — melhor rate limit)
