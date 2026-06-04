@@ -33,7 +33,7 @@ from agent import run_qa_agent
 import pathlib as _pathlib
 load_dotenv(_pathlib.Path(__file__).parent / '.env', override=True)
 
-LOCAL_VERSION = "1.4.9"
+LOCAL_VERSION = "1.4.10"
 
 # Corrige CEREBRAS_MODEL imediatamente se .env tiver modelo desatualizado.
 # Garante que mesmo sem auto-update o modelo certo é usado na sessão atual.
@@ -1624,6 +1624,27 @@ async def token_valid(client, backend_url, jwt):
 
 # ─── Cerebras key ─────────────────────────────────────────────────────────────
 
+def _update_env_provider(provider: str):
+    """Atualiza ou insere AI_PROVIDER no .env local."""
+    import re as _re
+    env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.env')
+    try:
+        content = ''
+        if os.path.exists(env_path):
+            with open(env_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+        if 'AI_PROVIDER=' in content:
+            content = _re.sub(r'^AI_PROVIDER=.*$', f'AI_PROVIDER={provider}',
+                               content, flags=_re.MULTILINE)
+        else:
+            content += f'\nAI_PROVIDER={provider}\n'
+        with open(env_path, 'w', encoding='utf-8') as f:
+            f.write(content)
+        os.environ['AI_PROVIDER'] = provider
+    except Exception:
+        pass
+
+
 def _update_env_cerebras_key(new_key: str):
     """Atualiza CEREBRAS_API_KEY no .env local se o arquivo existir."""
     import re as _re
@@ -2269,39 +2290,47 @@ async def main():
             ok("Sessão de usuário removida.")
             print()
 
-        _provider = os.getenv("AI_PROVIDER", "groq").lower().strip()
         if trocar_cerebras:
-            if _provider == "sambanova":
+            # Pergunta qual provider antes de pedir a chave
+            print()
+            print("  Escolha o provider de IA:")
+            print("  [1]  Cerebras  — grátis, 1M tokens/dia (pode ter fila de 60s)")
+            print("  [2]  SambaNova — grátis com $5 de crédito, sem fila")
+            print()
+            prov_choice = input("  Provider [1/2]: ").strip()
+            print()
+
+            if prov_choice == "2":
+                # SambaNova
                 session_data.pop("sambanova_key", None)
                 sess.save(session_data)
+                info("Crie ou consulte sua chave em: https://cloud.sambanova.ai → API")
                 print()
-                info("Digite a nova chave SambaNova:")
-                info("Crie ou consulte em: https://cloud.sambanova.ai → API")
-                print()
-                new_key = input("  Nova SambaNova API key: ").strip()
+                new_key = input("  SambaNova API key: ").strip()
                 while not new_key:
                     err("Chave inválida — não pode ser vazia")
-                    new_key = input("  Nova SambaNova API key: ").strip()
+                    new_key = input("  SambaNova API key: ").strip()
                 session_data["sambanova_key"] = new_key
                 sess.save(session_data)
                 _update_env_sambanova_key(new_key)
-                ok("Nova chave SambaNova salva (sessão + .env).")
+                _update_env_provider("sambanova")
+                ok("SambaNova configurada e salva (.env).")
                 print()
             else:
+                # Cerebras (padrão)
                 session_data.pop("cerebras_key", None)
                 sess.save(session_data)
-                print()
-                info("Digite a nova chave Cerebras (csk-...):")
                 info("Crie uma chave gratuita em: https://cloud.cerebras.ai")
                 print()
-                new_key = input("  Nova Cerebras API key: ").strip()
+                new_key = input("  Cerebras API key (csk-...): ").strip()
                 while not new_key.startswith("csk-"):
                     err("Chave inválida — deve começar com 'csk-'")
-                    new_key = input("  Nova Cerebras API key: ").strip()
+                    new_key = input("  Cerebras API key (csk-...): ").strip()
                 session_data["cerebras_key"] = new_key
                 sess.save(session_data)
                 _update_env_cerebras_key(new_key)
-                ok("Nova chave salva (sessão + .env).")
+                _update_env_provider("cerebras")
+                ok("Cerebras configurada e salva (.env).")
                 print()
 
         # 1. Autenticação
@@ -2327,9 +2356,10 @@ async def main():
             ok(f"Login realizado — {user['email']}")
             info("Sessão válida por 30 dias.")
 
-        # 2. Chave do provider LLM (Cerebras ou SambaNova conforme AI_PROVIDER no .env)
-        _provider = os.getenv("AI_PROVIDER", "groq").lower().strip()
-        if _provider == "sambanova":
+        # 2. Chave do provider LLM — usa o provider configurado no .env (AI_PROVIDER)
+        # O menu [2] acima já permite trocar o provider e a chave de forma interativa.
+        _active_provider = os.getenv("AI_PROVIDER", "groq").lower().strip()
+        if _active_provider == "sambanova":
             cerebras_key = ensure_sambanova_key(session_data)
             ok("SambaNova configurada.")
         else:
