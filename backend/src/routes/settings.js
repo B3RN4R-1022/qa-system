@@ -2,10 +2,10 @@ const express = require('express')
 const router = express.Router()
 const prisma = require('../lib/prisma')
 
-// Pricing: Claude Sonnet 4.6 — $3/1M input, $15/1M output
+// Pricing: Claude Haiku 4.5 — $0.80/1M input, $4/1M output
 // Assumindo 65% input / 35% output por teste (browser-use tem contexto crescente)
-const PRICE_INPUT_PER_M  = 3.00
-const PRICE_OUTPUT_PER_M = 15.00
+const PRICE_INPUT_PER_M  = 0.80
+const PRICE_OUTPUT_PER_M = 4.00
 const INPUT_FRACTION     = 0.65
 const USD_TO_BRL         = 5.75
 

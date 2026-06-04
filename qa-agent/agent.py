@@ -175,8 +175,8 @@ class BrowserUseLLM:
     # ── Contador de custo ao vivo (módulo-global, atualizado a cada step) ───
     # Worker lê via get_live_cost_brl() para exibir no spinner
     _live_cost_brl: float = 0.0
-    _PRICE_IN_PER_M  = 3.00   # Claude Sonnet 4.6 $/1M input
-    _PRICE_OUT_PER_M = 15.00  # Claude Sonnet 4.6 $/1M output
+    _PRICE_IN_PER_M  = 0.80  # Claude Haiku 4.5 $/1M input
+    _PRICE_OUT_PER_M = 4.00  # Claude Haiku 4.5 $/1M output
     _USD_BRL         = 5.75
 
     def __init__(self, llm, provider_override=None, fallback_llm=None):
@@ -375,7 +375,7 @@ def build_llm(llm_key: str = None):
         api_key = llm_key or os.getenv("ANTHROPIC_API_KEY")
         if not api_key:
             raise ValueError("ANTHROPIC_API_KEY não configurada no .env do qa-agent")
-        model = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-6")
+        model = os.getenv("CLAUDE_MODEL", "claude-haiku-4-5-20251001")
         print(f"[QA Agent] ⚡ Usando Claude (Anthropic) — modelo: {model}")
         base_llm = ChatAnthropic(model=model, api_key=api_key, temperature=0.1)
         return BrowserUseLLM(base_llm, provider_override="anthropic"), model

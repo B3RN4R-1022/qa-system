@@ -33,11 +33,11 @@ from agent import run_qa_agent, get_live_cost_brl
 import pathlib as _pathlib
 load_dotenv(_pathlib.Path(__file__).parent / '.env', override=True)
 
-LOCAL_VERSION = "1.4.17"
+LOCAL_VERSION = "1.4.18"
 
-# ─── Precificação (Claude Sonnet 4.6) ────────────────────────────────────────
-_PRICE_IN_PER_M  = 3.00   # USD por 1M tokens de entrada
-_PRICE_OUT_PER_M = 15.00  # USD por 1M tokens de saída
+# ─── Precificação (Claude Haiku 4.5) ─────────────────────────────────────────
+_PRICE_IN_PER_M  = 0.80  # USD por 1M tokens de entrada
+_PRICE_OUT_PER_M = 4.00  # USD por 1M tokens de saída
 _USD_BRL         = 5.75   # taxa de câmbio aproximada
 
 def _cost_brl(input_tokens: int, output_tokens: int) -> float:
@@ -2144,7 +2144,7 @@ async def run_job(client, backend_url, headers, job, llm_key):
     if tokens:
         custo = _cost_brl(int(tokens * 0.65), int(tokens * 0.35))
         info(f"Tokens usados : {tokens:,}  (in: {int(tokens*0.65):,} | out: {int(tokens*0.35):,})")
-        info(f"Custo estimado: {_fmt_brl(custo)}  (Claude Sonnet 4.6)")
+        info(f"Custo estimado: {_fmt_brl(custo)}  (Claude Haiku 4.5)")
     print(f"  {icon} Concluído: {job['title']}")
     print("  ─────────────────────────────────────────────")
     print()

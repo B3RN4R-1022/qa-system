@@ -359,7 +359,7 @@ function AIConfigSection() {
         </button>
       </div>
       <p className="text-xs text-gray-400 mb-4">
-        Claude Sonnet 4.6 · estimativa baseada em 65% input / 35% output · câmbio R$&nbsp;5,75/USD
+        Claude Haiku 4.5 · estimativa baseada em 65% input / 35% output · câmbio R$&nbsp;5,75/USD
       </p>
 
       {loading ? (
