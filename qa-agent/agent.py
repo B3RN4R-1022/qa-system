@@ -340,24 +340,17 @@ def build_llm(cerebras_api_key: str = None):
         api_key = cerebras_api_key or os.getenv("SAMBANOVA_API_KEY")
         if not api_key:
             raise ValueError("SAMBANOVA_API_KEY não configurada. Adicione no .env do qa-agent")
-        model         = os.getenv("SAMBANOVA_MODEL", "Meta-Llama-3.3-70B-Instruct")
-        fallback_model = "Meta-Llama-3.1-8B-Instruct" if "70B" in model else "Meta-Llama-3.3-70B-Instruct"
-        print(f"[QA Agent] ⚡ Usando SambaNova — modelo: {model} | fallback: {fallback_model}")
+        model = os.getenv("SAMBANOVA_MODEL", "Meta-Llama-3.3-70B-Instruct")
+        print(f"[QA Agent] ⚡ Usando SambaNova — modelo: {model}")
         base_llm = ChatOpenAI(
             model=model,
             api_key=api_key,
             base_url="https://api.sambanova.ai/v1",
             temperature=0.1,
         )
-        fallback_llm = ChatOpenAI(
-            model=fallback_model,
-            api_key=api_key,
-            base_url="https://api.sambanova.ai/v1",
-            temperature=0.1,
-        )
-        # provider_override="cerebras" → reutiliza a lógica de function_calling limpo do Cerebras
-        # (SambaNova usa a mesma API OpenAI-compatible e responde igual ao Cerebras)
-        return BrowserUseLLM(base_llm, provider_override="cerebras", fallback_llm=fallback_llm), model
+        # SambaNova não tem a fila de 60s do Cerebras — fallback desabilitado
+        # (browser-use já tem retry automático em caso de 429 transiente)
+        return BrowserUseLLM(base_llm, provider_override="cerebras", fallback_llm=None), model
 
     elif provider == "cerebras":
         from langchain_openai import ChatOpenAI
