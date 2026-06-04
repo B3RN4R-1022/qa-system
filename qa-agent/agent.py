@@ -34,6 +34,63 @@ def _clean_schema(obj):
     return obj
 
 
+# Mapeamento de nomes de ação que o LLM usa (treinamento antigo) → nome real no browser-use 0.12+
+# O LLM gera "input_text" mas a ação foi renomeada para "input" no browser-use 0.12.9
+_ACTION_ALIASES: dict[str, str] = {
+    'input_text': 'input',
+    'type_text':  'input',
+    'fill':       'input',
+}
+
+# Renomeia parâmetros de ações específicas (LLM usa "element_index" mas o campo real é "index")
+_PARAM_ALIASES: dict[str, dict[str, str]] = {
+    'input': {'element_index': 'index'},
+}
+
+
+def _fix_action_args(args: dict) -> dict:
+    """
+    Corrige nomes de ação e de parâmetros antes da validação Pydantic.
+
+    Problema: o LLM (treinado em exemplos antigos do browser-use) gera:
+      {"action": [{"input_text": {"element_index": 8, "text": "..."}}]}
+
+    Mas browser-use 0.12.9 espera:
+      {"action": [{"input": {"index": 8, "text": "..."}}]}
+
+    Sem esta correção, Pydantic gera ~150 ValidationErrors tentando encaixar
+    a ação em cada modelo do union AgentOutput.
+    """
+    if 'action' not in args:
+        return args
+
+    import copy
+    result = copy.deepcopy(args)
+    fixed_actions = []
+
+    for action_dict in result.get('action', []):
+        if not isinstance(action_dict, dict):
+            fixed_actions.append(action_dict)
+            continue
+
+        new_dict = {}
+        for key, val in action_dict.items():
+            # 1. Corrige nome da ação (ex: input_text → input)
+            real_key = _ACTION_ALIASES.get(key, key)
+
+            # 2. Corrige nomes de parâmetros dentro da ação
+            if isinstance(val, dict) and real_key in _PARAM_ALIASES:
+                param_map = _PARAM_ALIASES[real_key]
+                val = {param_map.get(k, k): v for k, v in val.items()}
+
+            new_dict[real_key] = val
+
+        fixed_actions.append(new_dict)
+
+    result['action'] = fixed_actions
+    return result
+
+
 async def _invoke_clean_function_calling(llm, output_format, messages):
     """
     Usa function_calling com schema limpo (sem min_items etc.).
@@ -50,6 +107,8 @@ async def _invoke_clean_function_calling(llm, output_format, messages):
 
     if hasattr(response, 'tool_calls') and response.tool_calls:
         args = response.tool_calls[0].get('args', {})
+        # Corrige nomes de ação/parâmetro antes de validar (ex: input_text→input, element_index→index)
+        args = _fix_action_args(args)
         return response, output_format.model_validate(args)
 
     raise ValueError(f"Cerebras não retornou tool_call. Conteúdo: {str(getattr(response, 'content', ''))[:200]}")

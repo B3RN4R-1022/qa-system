@@ -33,7 +33,7 @@ from agent import run_qa_agent
 import pathlib as _pathlib
 load_dotenv(_pathlib.Path(__file__).parent / '.env', override=True)
 
-LOCAL_VERSION = "1.4.7"
+LOCAL_VERSION = "1.4.8"
 
 # Corrige CEREBRAS_MODEL imediatamente se .env tiver modelo desatualizado.
 # Garante que mesmo sem auto-update o modelo certo é usado na sessão atual.
