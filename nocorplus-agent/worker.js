@@ -176,18 +176,17 @@ async function showAndConfirmConfig() {
     try { fs.unlinkSync(SESSION_FILE) } catch {}
   }
 
-  const cacheDir  = path.join(__dirname, '.nocorplus', 'kv')
+  const kvDir     = path.join(__dirname, '.nocorplus', 'kv')
   let   cacheInfo = ''
   try {
-    const entries = fs.readdirSync(cacheDir).length
-    cacheInfo = ` (${entries} entradas em cache)`
+    const entries = fs.readdirSync(kvDir).length
+    cacheInfo = ` (${entries} planos salvos)`
   } catch {}
-  const clearCache = await ask(`  Limpar cache de visão?${cacheInfo} (s/N): `)
+  const clearCache = await ask(`  Limpar cache de planos de IA?${cacheInfo} (s/N): `)
   if (clearCache.toLowerCase() === 's') {
     try {
-      fs.rmSync(path.join(__dirname, '.nocorplus', 'kv'), { recursive: true, force: true })
-      fs.rmSync(path.join(__dirname, '.nocorplus', 'vision'), { recursive: true, force: true })
-      console.log('  ✅ Cache limpo — próximo teste será executado do zero\n')
+      fs.rmSync(kvDir, { recursive: true, force: true })
+      console.log('  ✅ Cache de planos limpo — IA vai replanejar no próximo teste\n')
     } catch (e) {
       console.log(`  ⚠️  Não foi possível limpar: ${e.message}\n`)
     }
