@@ -76,33 +76,42 @@ function saveToken(token) {
 }
 
 async function login() {
-  console.log('\n  Faça login com sua conta do QA System:')
-  const email    = await ask('  Email: ')
-  const password = await ask('  Senha: ')
+  while (true) {
+    console.log('\n  Faça login com sua conta do QA System:')
+    const email    = await ask('  Email: ')
+    const password = await ask('  Senha: ')
 
-  const r1 = await fetch(`${BACKEND_URL}/auth/login`, {
-    method:  'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body:    JSON.stringify({ email, password }),
-  })
-  const d1 = await r1.json()
-  if (!r1.ok) throw new Error(d1.error || 'Falha no login')
-
-  if (d1.requiresTotp) {
-    const code = await ask('  Código do autenticador (6 dígitos): ')
-    const r2 = await fetch(`${BACKEND_URL}/auth/verify-totp`, {
+    const r1 = await fetch(`${BACKEND_URL}/auth/login`, {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ tempToken: d1.tempToken, code }),
+      body:    JSON.stringify({ email, password }),
     })
-    const d2 = await r2.json()
-    if (!r2.ok) throw new Error(d2.error || 'Código incorreto')
-    saveToken(d2.token)
-    return d2.token
-  }
+    const d1 = await r1.json()
 
-  saveToken(d1.token)
-  return d1.token
+    if (!r1.ok) {
+      console.log(`  ❌ ${d1.error || 'Email ou senha incorretos'} — tente novamente`)
+      continue
+    }
+
+    if (d1.requiresTotp) {
+      const code = await ask('  Código do autenticador (6 dígitos): ')
+      const r2 = await fetch(`${BACKEND_URL}/auth/verify-totp`, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ tempToken: d1.tempToken, code }),
+      })
+      const d2 = await r2.json()
+      if (!r2.ok) {
+        console.log(`  ❌ ${d2.error || 'Código incorreto'} — tente novamente`)
+        continue
+      }
+      saveToken(d2.token)
+      return d2.token
+    }
+
+    saveToken(d1.token)
+    return d1.token
+  }
 }
 
 async function ensureToken() {
