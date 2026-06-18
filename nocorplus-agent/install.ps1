@@ -21,33 +21,58 @@ catch {
   Read-Host "  Pressione Enter para sair"; exit 1
 }
 
-# ── Download ──────────────────────────────────────────────────────────────────
+# ── Download via ZIP ──────────────────────────────────────────────────────────
 
 $dest = "$env:USERPROFILE\nocorplus-agent"
 
+Write-Host ""
 if (Test-Path $dest) {
-  Write-Host ""
-  Write-Host "  Pasta ja existe — atualizando arquivos..."
-  Set-Location $dest
-  git fetch origin master --quiet 2>&1 | Out-Null
-  git reset --hard origin/master --quiet 2>&1 | Out-Null
+  Write-Host "  Atualizando Nocorp+ Agent..."
 } else {
-  Write-Host ""
   Write-Host "  Baixando Nocorp+ Agent..."
-  $tmp = "$env:TEMP\qa-system-tmp-$(Get-Random)"
-  git clone --filter=blob:none --sparse https://github.com/B3RN4R-1022/qa-system.git $tmp --quiet 2>&1 | Out-Null
-  Set-Location $tmp
-  git sparse-checkout set nocorplus-agent --quiet 2>&1 | Out-Null
-  if (-not (Test-Path "$tmp\nocorplus-agent")) {
-    Write-Host "  ERRO: Falha ao baixar. Verifique sua conexao e acesso ao GitHub."
-    Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
-    Read-Host "  Pressione Enter para sair"; exit 1
-  }
-  Copy-Item -Recurse "$tmp\nocorplus-agent" $dest
-  Set-Location $env:USERPROFILE
-  Remove-Item -Recurse -Force $tmp
-  Write-Host "  OK  Baixado para: $dest"
 }
+
+$zip       = "$env:TEMP\qa-system-$(Get-Random).zip"
+$extracted = "$env:TEMP\qa-system-$(Get-Random)"
+
+try {
+  Invoke-WebRequest "https://github.com/B3RN4R-1022/qa-system/archive/refs/heads/master.zip" `
+    -OutFile $zip -UseBasicParsing
+} catch {
+  Write-Host "  ERRO: Falha ao baixar o arquivo."
+  Write-Host "  Verifique sua conexao com a internet e tente novamente."
+  Read-Host "  Pressione Enter para sair"; exit 1
+}
+
+try {
+  Expand-Archive $zip $extracted -Force
+} catch {
+  Write-Host "  ERRO: Falha ao extrair o arquivo baixado."
+  Remove-Item $zip -ErrorAction SilentlyContinue
+  Read-Host "  Pressione Enter para sair"; exit 1
+}
+
+$src = "$extracted\qa-system-master\nocorplus-agent"
+if (-not (Test-Path $src)) {
+  Write-Host "  ERRO: Estrutura inesperada no arquivo baixado."
+  Remove-Item $zip -ErrorAction SilentlyContinue
+  Remove-Item -Recurse -Force $extracted -ErrorAction SilentlyContinue
+  Read-Host "  Pressione Enter para sair"; exit 1
+}
+
+# Preserva .env e .session.json ao atualizar
+$savedEnv     = if (Test-Path "$dest\.env")          { Get-Content "$dest\.env"          -Raw } else { $null }
+$savedSession = if (Test-Path "$dest\.session.json") { Get-Content "$dest\.session.json" -Raw } else { $null }
+
+if (Test-Path $dest) { Remove-Item -Recurse -Force $dest }
+Copy-Item -Recurse $src $dest
+
+if ($savedEnv)     { Set-Content "$dest\.env"          $savedEnv     }
+if ($savedSession) { Set-Content "$dest\.session.json" $savedSession }
+
+Remove-Item $zip -ErrorAction SilentlyContinue
+Remove-Item -Recurse -Force $extracted -ErrorAction SilentlyContinue
+Write-Host "  OK  Pronto em: $dest"
 
 # ── npm install ───────────────────────────────────────────────────────────────
 
@@ -83,11 +108,9 @@ try {
   $g.SmoothingMode     = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
   $g.TextRenderingHint = [System.Drawing.Text.TextRenderingHint]::AntiAliasGridFit
 
-  # Fundo indigo (cor Nocorp+)
   $bg = [System.Drawing.Color]::FromArgb(99, 102, 241)
   $g.Clear($bg)
 
-  # Texto N+
   $font     = New-Object System.Drawing.Font("Segoe UI", 110, [System.Drawing.FontStyle]::Bold)
   $brush    = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::White)
   $sf       = New-Object System.Drawing.StringFormat
@@ -97,7 +120,6 @@ try {
   $g.DrawString("N+", $font, $brush, $rect, $sf)
   $g.Dispose()
 
-  # Salva PNG temporário e converte para ICO (formato moderno suporta PNG embutido)
   $pngPath  = "$env:TEMP\nocorp_icon_$(Get-Random).png"
   $bmp.Save($pngPath, [System.Drawing.Imaging.ImageFormat]::Png)
   $bmp.Dispose()
@@ -105,17 +127,17 @@ try {
 
   $ms     = New-Object System.IO.MemoryStream
   $writer = New-Object System.IO.BinaryWriter($ms)
-  $writer.Write([uint16]0)                  # Reserved
-  $writer.Write([uint16]1)                  # Type ICO
-  $writer.Write([uint16]1)                  # 1 imagem
-  $writer.Write([byte]0)                    # Width  (0 = 256)
-  $writer.Write([byte]0)                    # Height (0 = 256)
-  $writer.Write([byte]0)                    # Color count
-  $writer.Write([byte]0)                    # Reserved
-  $writer.Write([uint16]1)                  # Planes
-  $writer.Write([uint16]32)                 # Bit depth
-  $writer.Write([uint32]$pngBytes.Length)   # Tamanho PNG
-  $writer.Write([uint32]22)                 # Offset (6 header + 16 dir)
+  $writer.Write([uint16]0)
+  $writer.Write([uint16]1)
+  $writer.Write([uint16]1)
+  $writer.Write([byte]0)
+  $writer.Write([byte]0)
+  $writer.Write([byte]0)
+  $writer.Write([byte]0)
+  $writer.Write([uint16]1)
+  $writer.Write([uint16]32)
+  $writer.Write([uint32]$pngBytes.Length)
+  $writer.Write([uint32]22)
   $writer.Write($pngBytes)
   $writer.Flush()
   [System.IO.File]::WriteAllBytes($iconPath, $ms.ToArray())
@@ -129,7 +151,7 @@ try {
 
 # ── Cria atalho na área de trabalho ──────────────────────────────────────────
 
-$lnk = "$env:USERPROFILE\Desktop\Nocorp+ Agent.lnk"
+$lnk      = "$env:USERPROFILE\Desktop\Nocorp+ Agent.lnk"
 $shell    = New-Object -ComObject WScript.Shell
 $shortcut = $shell.CreateShortcut($lnk)
 $shortcut.TargetPath       = "cmd.exe"

@@ -27,27 +27,34 @@ echo "  OK  $(git --version)"
 
 DEST="$HOME/nocorplus-agent"
 
+echo ""
 if [ -d "$DEST" ]; then
-  echo ""
-  echo "  Pasta já existe — atualizando arquivos..."
-  cd "$DEST"
-  git fetch origin master --quiet && git reset --hard origin/master --quiet 2>/dev/null || true
+  echo "  Atualizando Nocorp+ Agent..."
 else
-  echo ""
   echo "  Baixando Nocorp+ Agent..."
-  TMP="$(mktemp -d)"
-  git clone --filter=blob:none --sparse https://github.com/B3RN4R-1022/qa-system.git "$TMP" --quiet 2>&1
-  cd "$TMP"
-  git sparse-checkout set nocorplus-agent --quiet 2>&1
-  if [ ! -d "$TMP/nocorplus-agent" ]; then
-    echo "  ERRO: Falha ao baixar. Verifique sua conexão e acesso ao GitHub."
-    rm -rf "$TMP"
-    exit 1
-  fi
-  cp -r "$TMP/nocorplus-agent" "$DEST"
-  rm -rf "$TMP"
-  echo "  OK  Baixado para: $DEST"
 fi
+
+TMP="$(mktemp -d)"
+git clone --depth=1 https://github.com/B3RN4R-1022/qa-system.git "$TMP/repo" --quiet 2>&1
+
+if [ ! -d "$TMP/repo/nocorplus-agent" ]; then
+  echo "  ERRO: Falha ao baixar. Verifique sua conexão e acesso ao GitHub."
+  rm -rf "$TMP"
+  exit 1
+fi
+
+# Preserva .env e .session.json ao atualizar
+[ -f "$DEST/.env" ]          && cp "$DEST/.env"          "$TMP/save.env"
+[ -f "$DEST/.session.json" ] && cp "$DEST/.session.json" "$TMP/save.session.json"
+
+rm -rf "$DEST"
+cp -r "$TMP/repo/nocorplus-agent" "$DEST"
+
+[ -f "$TMP/save.env" ]          && cp "$TMP/save.env"          "$DEST/.env"
+[ -f "$TMP/save.session.json" ] && cp "$TMP/save.session.json" "$DEST/.session.json"
+
+rm -rf "$TMP"
+echo "  OK  Pronto em: $DEST"
 
 # ── npm install ───────────────────────────────────────────────────────────────
 
@@ -77,19 +84,16 @@ ICON_DIR="$DEST/icon.iconset"
 mkdir -p "$ICON_DIR"
 
 python3 - <<'PYEOF'
-import os, struct, zlib, math
+import os, struct, zlib
 
 DEST = os.path.expanduser("~/nocorplus-agent")
 OUT  = os.path.join(DEST, "icon.iconset")
 
 def make_png(size):
-    """PNG sólido indigo (99,102,241) — ícone de reconhecimento Nocorp+."""
     r, g, b = 99, 102, 241
-
     def chunk(tag, data):
         crc = zlib.crc32(tag + data) & 0xffffffff
         return struct.pack('>I', len(data)) + tag + data + struct.pack('>I', crc)
-
     raw = b''.join(b'\x00' + bytes([r, g, b] * size) for _ in range(size))
     sig  = b'\x89PNG\r\n\x1a\n'
     ihdr = chunk(b'IHDR', struct.pack('>IIBBBBB', size, size, 8, 2, 0, 0, 0))
@@ -102,7 +106,6 @@ for sz in [16, 32, 64, 128, 256, 512]:
         f.write(make_png(sz))
 PYEOF
 
-# Converte iconset → icns (sips + iconutil, ambos nativos no macOS)
 ICNS="$DEST/nocorp.icns"
 iconutil -c icns "$ICON_DIR" -o "$ICNS" 2>/dev/null
 rm -rf "$ICON_DIR"
@@ -114,7 +117,6 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS"
 mkdir -p "$APP/Contents/Resources"
 
-# Info.plist
 cat > "$APP/Contents/Info.plist" << 'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -130,10 +132,8 @@ cat > "$APP/Contents/Info.plist" << 'PLIST'
 </plist>
 PLIST
 
-# Ícone do .app
 [ -f "$ICNS" ] && cp "$ICNS" "$APP/Contents/Resources/AppIcon.icns"
 
-# Executável — abre Terminal e roda o worker
 cat > "$APP/Contents/MacOS/run" << 'RUN'
 #!/bin/bash
 osascript -e 'tell application "Terminal"
@@ -143,7 +143,6 @@ end tell'
 RUN
 chmod +x "$APP/Contents/MacOS/run"
 
-# Refresca o ícone no Finder
 touch "$APP"
 
 echo ""
