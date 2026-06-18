@@ -5,12 +5,16 @@ require('dotenv').config()
 const fs       = require('fs')
 const path     = require('path')
 const readline = require('readline')
+const { spawn } = require('child_process')
 const { NocorPlus } = require('nocorplus')
 
 const BACKEND_URL  = (process.env.BACKEND_URL || 'https://qa-system-5vpf.onrender.com').replace(/\/$/, '')
 const POLL_MS      = 5000
 const SESSION_FILE = path.join(__dirname, '.session.json')
 const ENV_FILE     = path.join(__dirname, '.env')
+const VER_FILE     = path.join(__dirname, '.version')
+const GITHUB_REPO  = 'B3RN4R-1022/qa-system'
+const AGENT_PATH   = 'nocorplus-agent/worker.js'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -43,16 +47,76 @@ function clearApiKeys() {
 function isInvalidKeyError(err) {
   const m = err?.message || ''
   return m.includes('authentication_error') || m.includes('invalid x-api-key') ||
-         m.includes('invalid_api_key') || m.includes('Incorrect API key') ||
-         m.includes('401')
+         m.includes('invalid_api_key') || m.includes('Incorrect API key')
 }
 
-// ── Chave de API ──────────────────────────────────────────────────────────────
+function maskKey(key) {
+  if (!key || key.length < 12) return '—'
+  return `${key.slice(0, 10)}...${key.slice(-4)}`
+}
+
+function loadSession() {
+  try { return JSON.parse(fs.readFileSync(SESSION_FILE, 'utf8')) } catch { return null }
+}
+
+function saveSession(data) {
+  fs.writeFileSync(SESSION_FILE, JSON.stringify(data), 'utf8')
+}
+
+// ── 1. Verificar atualizações ─────────────────────────────────────────────────
+
+async function checkUpdates() {
+  process.stdout.write('  Verificando atualizações...  ')
+  try {
+    const res = await fetch(
+      `https://api.github.com/repos/${GITHUB_REPO}/commits?path=${AGENT_PATH}&per_page=1`,
+      { headers: { 'User-Agent': 'nocorplus-agent' } }
+    )
+    if (!res.ok) { console.log('(ignorado)\n'); return false }
+
+    const [commit] = await res.json()
+    let localSha = ''
+    try { localSha = fs.readFileSync(VER_FILE, 'utf8').trim() } catch {}
+
+    if (commit.sha === localSha) {
+      console.log('✅ Atualizado\n')
+      return false
+    }
+
+    const date = new Date(commit.commit.author.date).toLocaleDateString('pt-BR')
+    console.log(`\n  ⚡ Nova versão disponível (${date})`)
+    const ans = await ask('  Atualizar agora? (s/N): ')
+    if (ans.toLowerCase() !== 's') {
+      fs.writeFileSync(VER_FILE, commit.sha, 'utf8')
+      console.log()
+      return false
+    }
+
+    process.stdout.write('  Baixando atualização... ')
+    const dl = await fetch(
+      `https://raw.githubusercontent.com/${GITHUB_REPO}/master/${AGENT_PATH}`
+    )
+    fs.writeFileSync(__filename, await dl.text(), 'utf8')
+    fs.writeFileSync(VER_FILE, commit.sha, 'utf8')
+    console.log('✅ Concluído')
+    console.log('  Reiniciando...\n')
+
+    spawn(process.execPath, [__filename], { stdio: 'inherit' })
+      .on('exit', code => process.exit(code ?? 0))
+    return true  // sinaliza que vai reiniciar
+
+  } catch {
+    console.log('(sem conexão)\n')
+    return false
+  }
+}
+
+// ── 2. Chave de API ───────────────────────────────────────────────────────────
 
 async function ensureApiKey() {
   if (process.env.ANTHROPIC_API_KEY || process.env.OPENAI_API_KEY) return
 
-  console.log('\n  Configuração da chave de IA')
+  console.log('  Configuração da chave de IA')
   console.log('  ─────────────────────────────────────────────')
 
   const choice = await ask('  Provedor  (1) Claude  (2) OpenAI  → ')
@@ -67,7 +131,6 @@ async function ensureApiKey() {
     prefix  = 'sk-ant-'
     hint    = 'Crie em: console.anthropic.com → API Keys'
   }
-
   console.log(`  ${hint}`)
 
   let key = ''
@@ -76,25 +139,46 @@ async function ensureApiKey() {
     if (!key.startsWith(prefix))
       console.log(`  Chave inválida — deve começar com "${prefix}"`)
   }
-
   saveEnv(keyName, key)
-  console.log('  ✅ Chave salva.')
+  console.log('  ✅ Chave salva\n')
 }
 
-// ── Autenticação ──────────────────────────────────────────────────────────────
+// ── 3. Exibir config + opção de alterar ──────────────────────────────────────
+
+async function showAndConfirmConfig() {
+  const provider   = process.env.ANTHROPIC_API_KEY ? 'Claude'
+                   : process.env.OPENAI_API_KEY    ? 'OpenAI'
+                   : '(não configurado)'
+  const keyVal     = process.env.ANTHROPIC_API_KEY || process.env.OPENAI_API_KEY || ''
+  const keyDisplay = maskKey(keyVal)
+
+  const session = loadSession()
+  const account = session?.email || (session?.token ? 'sessão salva' : '(não autenticado)')
+
+  console.log('  ┌───────────────────────────────────────────────────┐')
+  console.log(`  │  Provedor : ${(provider + '  ' + keyDisplay).padEnd(38)}│`)
+  console.log(`  │  Conta    : ${account.padEnd(38)}│`)
+  console.log('  └───────────────────────────────────────────────────┘')
+  console.log()
+
+  const change = await ask('  Alterar configurações? (s/N): ')
+  if (change.toLowerCase() === 's') {
+    clearApiKeys()
+    await ensureApiKey()
+    try { fs.unlinkSync(SESSION_FILE) } catch {}
+  }
+  console.log()
+}
+
+// ── 4. Autenticação ───────────────────────────────────────────────────────────
 
 function loadToken() {
-  try { return JSON.parse(fs.readFileSync(SESSION_FILE, 'utf8')).token || null }
-  catch { return null }
-}
-
-function saveToken(token) {
-  fs.writeFileSync(SESSION_FILE, JSON.stringify({ token }), 'utf8')
+  return loadSession()?.token || null
 }
 
 async function login() {
   while (true) {
-    console.log('\n  Faça login com sua conta do QA System:')
+    console.log('  Faça login com sua conta do QA System:')
     const email    = await ask('  Email: ')
     const password = await ask('  Senha: ')
 
@@ -104,11 +188,7 @@ async function login() {
       body:    JSON.stringify({ email, password }),
     })
     const d1 = await r1.json()
-
-    if (!r1.ok) {
-      console.log(`  ❌ ${d1.error || 'Email ou senha incorretos'} — tente novamente`)
-      continue
-    }
+    if (!r1.ok) { console.log(`  ❌ ${d1.error || 'Email ou senha incorretos'} — tente novamente\n`); continue }
 
     if (d1.requiresTotp) {
       const code = await ask('  Código do autenticador (6 dígitos): ')
@@ -118,15 +198,12 @@ async function login() {
         body:    JSON.stringify({ tempToken: d1.tempToken, code }),
       })
       const d2 = await r2.json()
-      if (!r2.ok) {
-        console.log(`  ❌ ${d2.error || 'Código incorreto'} — tente novamente`)
-        continue
-      }
-      saveToken(d2.token)
+      if (!r2.ok) { console.log(`  ❌ ${d2.error || 'Código incorreto'} — tente novamente\n`); continue }
+      saveSession({ token: d2.token, email })
       return d2.token
     }
 
-    saveToken(d1.token)
+    saveSession({ token: d1.token, email })
     return d1.token
   }
 }
@@ -142,10 +219,10 @@ async function ensureToken() {
   return login()
 }
 
-// ── Formatação do relatório ───────────────────────────────────────────────────
+// ── 5. Formatação do relatório ────────────────────────────────────────────────
 
 function formatReport(report) {
-  const icon = { PASS: '✅', WARN: '⚠️', FAIL: '❌' }[report.status] || '❌'
+  const icon  = { PASS: '✅', WARN: '⚠️', FAIL: '❌' }[report.status] || '❌'
   const lines = [
     `${icon} Status: ${report.status}`,
     `Duração: ${(report.durationMs / 1000).toFixed(1)}s  |  Custo: R$ ${report.cost?.brl ?? '?'}`,
@@ -153,16 +230,15 @@ function formatReport(report) {
     '',
   ]
   for (const s of report.steps || []) {
-    const si     = s.status === 'pass' ? '✓' : '✗'
-    const origin = s.toolOrigin ? ` [${s.toolOrigin}]` : ''
-    lines.push(`  ${si} ${s.action}${origin} — ${s.description ?? s.target ?? ''}`)
+    const si = s.status === 'pass' ? '✓' : '✗'
+    lines.push(`  ${si} [${s.action}] ${s.description ?? s.target ?? ''}`)
     if (s.error)   lines.push(`      Erro: ${s.error}`)
     if (s.warning) lines.push(`      ⚠️  ${s.warning}`)
   }
   return lines.join('\n')
 }
 
-// ── Execução de um job ────────────────────────────────────────────────────────
+// ── 6. Execução de um job ─────────────────────────────────────────────────────
 
 async function runJob(job, token) {
   const headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }
@@ -174,9 +250,9 @@ async function runJob(job, token) {
   const { claimed } = await claimRes.json()
   if (!claimed) return
 
-  console.log(`\n  ▶ Iniciando: ${job.title}`)
-  console.log(`    URL: ${job.preview_url}`)
-  if (job.criteria?.length) console.log(`    Critérios: ${job.criteria.length}`)
+  console.log(`\n  ▶  ${job.title}`)
+  console.log(`     ${job.preview_url}`)
+  if (job.criteria?.length) console.log(`     ${job.criteria.length} critério(s)`)
 
   const postResult = (status, report, tokensUsed) =>
     fetch(`${BACKEND_URL}/qa-jobs/${taskId}/result`, {
@@ -185,11 +261,13 @@ async function runJob(job, token) {
     })
 
   try {
-    const runner   = new NocorPlus({ headless: job.crawl_headless === true, verbose: false })
+    const runner = new NocorPlus({ headless: job.crawl_headless === true, verbose: false })
+
     const inputData = (job.login_email && job.login_password)
       ? { email: job.login_email, password: job.login_password }
       : undefined
-    const runInput  = job.criteria?.length
+
+    const runInput = job.criteria?.length
       ? { url: job.preview_url, scenario: job.criteria.map(c => ({ step: c })), data: inputData }
       : { url: job.preview_url, goal: job.title, data: inputData }
 
@@ -198,16 +276,17 @@ async function runJob(job, token) {
     const tokensUsed = (report.cost?.inputTokens ?? 0) + (report.cost?.outputTokens ?? 0)
 
     await postResult(statusMap[report.status] || 'done', formatReport(report), tokensUsed)
-    console.log(`  ✅ Concluído: ${report.status}  R$ ${report.cost?.brl ?? '?'}`)
+    console.log(`  ✅ ${report.status}  — R$ ${report.cost?.brl ?? '?'}  (${(report.durationMs / 1000).toFixed(1)}s)\n`)
+
   } catch (err) {
     if (isInvalidKeyError(err)) {
-      console.error('\n  ❌ Chave de API inválida — configure uma nova:')
+      console.error('\n  ❌ Chave de API inválida — configure uma nova:\n')
       clearApiKeys()
       await ensureApiKey()
       return
     }
     await postResult('error', `Erro: ${err.message}`)
-    console.error('  ❌ Erro:', err.message)
+    console.error(`  ❌ Erro: ${err.message}\n`)
   }
 }
 
@@ -220,10 +299,20 @@ async function main() {
   console.log('  ╚══════════════════════════════════════════╝')
   console.log()
 
+  // 1 — update
+  const restarting = await checkUpdates()
+  if (restarting) return
+
+  // 2 — chave de API (só pergunta se não tiver)
   await ensureApiKey()
 
+  // 3 — exibe config atual + opção de alterar
+  await showAndConfirmConfig()
+
+  // 4 — login (usa sessão salva se ainda válida)
   let token = await ensureToken()
-  console.log('\n  ✅ Autenticado. Aguardando jobs...\n')
+  console.log('  ✅ Autenticado. Aguardando jobs...\n')
+  console.log('  ─────────────────────────────────────────────')
 
   while (true) {
     try {
@@ -231,7 +320,7 @@ async function main() {
         headers: { Authorization: `Bearer ${token}` },
       })
       if (res.status === 401) {
-        console.log('  🔄 Sessão expirada — fazendo login novamente...')
+        console.log('\n  🔄 Sessão expirada — faça login novamente')
         token = await login()
         continue
       }
