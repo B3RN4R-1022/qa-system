@@ -99,8 +99,16 @@ async function checkUpdates() {
     fs.writeFileSync(__filename, await dl.text(), 'utf8')
     fs.writeFileSync(VER_FILE, commit.sha, 'utf8')
     console.log('✅ Concluído')
-    console.log('  Reiniciando...\n')
 
+    console.log('  Atualizando pacotes NocorPlus...')
+    await new Promise((resolve, reject) => {
+      const npm = spawn(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['install'], {
+        cwd: __dirname, stdio: 'inherit',
+      })
+      npm.on('close', code => code === 0 ? resolve() : reject(new Error(`npm install falhou (${code})`)))
+    }).catch(e => console.log(`  ⚠️  ${e.message}`))
+
+    console.log('  Reiniciando...\n')
     spawn(process.execPath, [__filename], { stdio: 'inherit' })
       .on('exit', code => process.exit(code ?? 0))
     return true  // sinaliza que vai reiniciar
@@ -166,6 +174,23 @@ async function showAndConfirmConfig() {
     clearApiKeys()
     await ensureApiKey()
     try { fs.unlinkSync(SESSION_FILE) } catch {}
+  }
+
+  const cacheDir  = path.join(__dirname, '.nocorplus', 'kv')
+  let   cacheInfo = ''
+  try {
+    const entries = fs.readdirSync(cacheDir).length
+    cacheInfo = ` (${entries} entradas em cache)`
+  } catch {}
+  const clearCache = await ask(`  Limpar cache de visão?${cacheInfo} (s/N): `)
+  if (clearCache.toLowerCase() === 's') {
+    try {
+      fs.rmSync(path.join(__dirname, '.nocorplus', 'kv'), { recursive: true, force: true })
+      fs.rmSync(path.join(__dirname, '.nocorplus', 'vision'), { recursive: true, force: true })
+      console.log('  ✅ Cache limpo — próximo teste será executado do zero\n')
+    } catch (e) {
+      console.log(`  ⚠️  Não foi possível limpar: ${e.message}\n`)
+    }
   }
   console.log()
 }
