@@ -231,9 +231,11 @@ function formatReport(report) {
   ]
   for (const s of report.steps || []) {
     const si = s.status === 'pass' ? '✓' : '✗'
-    lines.push(`  ${si} [${s.action}] ${s.description ?? s.target ?? ''}`)
-    if (s.error)   lines.push(`      Erro: ${s.error}`)
+    const origin = s.toolOrigin ? ` [${s.toolOrigin}]` : ''
+    const val    = s.value     ? ` = "${s.value}"`     : ''
+    lines.push(`  ${si} ${s.action}${origin} → ${s.target ?? ''}${val}`)
     if (s.warning) lines.push(`      ⚠️  ${s.warning}`)
+    if (s.error)   lines.push(`      ✗  ${s.error}`)
   }
   return lines.join('\n')
 }
@@ -268,7 +270,7 @@ async function runJob(job, token) {
       : undefined
 
     const runInput = job.criteria?.length
-      ? { url: job.preview_url, scenario: job.criteria.map(c => ({ step: c })), data: inputData }
+      ? { url: job.preview_url, scenario: job.criteria.map(c => ({ step: c, data: inputData })) }
       : { url: job.preview_url, goal: job.title, data: inputData }
 
     const report     = await runner.run(runInput)
