@@ -151,7 +151,7 @@ try {
 
 # ── Cria atalho na área de trabalho ──────────────────────────────────────────
 
-$lnk      = "$env:USERPROFILE\Desktop\Nocorp+ Agent.lnk"
+$lnk      = Join-Path ([Environment]::GetFolderPath('Desktop')) "Nocorp+ Agent.lnk"
 $shell    = New-Object -ComObject WScript.Shell
 $shortcut = $shell.CreateShortcut($lnk)
 $shortcut.TargetPath       = "cmd.exe"
