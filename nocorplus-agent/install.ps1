@@ -69,10 +69,6 @@ Write-Host "  OK  Dependencias instaladas"
 
 if (-not (Test-Path "$dest\.env")) {
   Copy-Item "$dest\.env.example" "$dest\.env"
-  Write-Host ""
-  Write-Host "  Configure sua chave de API antes de iniciar:"
-  Write-Host "  $dest\.env"
-  Start-Process notepad "$dest\.env" -Wait
 }
 
 # ── Gera ícone N+ via System.Drawing ─────────────────────────────────────────

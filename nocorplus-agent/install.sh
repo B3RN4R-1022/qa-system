@@ -69,10 +69,6 @@ echo "  OK  Dependências instaladas"
 
 if [ ! -f "$DEST/.env" ]; then
   cp "$DEST/.env.example" "$DEST/.env"
-  echo ""
-  echo "  Configure sua chave de API antes de iniciar:"
-  echo "  $DEST/.env"
-  open -e "$DEST/.env" 2>/dev/null || nano "$DEST/.env"
 fi
 
 # ── Cria ícone N+ via Python ──────────────────────────────────────────────────

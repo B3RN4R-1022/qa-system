@@ -10,6 +10,59 @@ const { NocorPlus } = require('nocorplus')
 const BACKEND_URL  = (process.env.BACKEND_URL || 'https://qa-system-5vpf.onrender.com').replace(/\/$/, '')
 const POLL_MS      = 5000
 const SESSION_FILE = path.join(__dirname, '.session.json')
+const ENV_FILE     = path.join(__dirname, '.env')
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+function ask(question) {
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout })
+  return new Promise(resolve => rl.question(question, ans => { rl.close(); resolve(ans.trim()) }))
+}
+
+function saveEnv(key, value) {
+  let content = ''
+  try { content = fs.readFileSync(ENV_FILE, 'utf8') } catch {}
+  const re = new RegExp(`^${key}=.*$`, 'm')
+  content = re.test(content)
+    ? content.replace(re, `${key}=${value}`)
+    : content + `\n${key}=${value}\n`
+  fs.writeFileSync(ENV_FILE, content, 'utf8')
+  process.env[key] = value
+}
+
+// ── Chave de API ──────────────────────────────────────────────────────────────
+
+async function ensureApiKey() {
+  if (process.env.ANTHROPIC_API_KEY || process.env.OPENAI_API_KEY) return
+
+  console.log('\n  Configuração da chave de IA')
+  console.log('  ─────────────────────────────────────────────')
+
+  const choice = await ask('  Provedor  (1) Claude  (2) OpenAI  → ')
+
+  let keyName, prefix, hint
+  if (choice === '2') {
+    keyName = 'OPENAI_API_KEY'
+    prefix  = 'sk-'
+    hint    = 'Crie em: platform.openai.com → API keys'
+  } else {
+    keyName = 'ANTHROPIC_API_KEY'
+    prefix  = 'sk-ant-'
+    hint    = 'Crie em: console.anthropic.com → API Keys'
+  }
+
+  console.log(`  ${hint}`)
+
+  let key = ''
+  while (!key.startsWith(prefix)) {
+    key = await ask(`  Cole sua chave (${prefix}...): `)
+    if (!key.startsWith(prefix))
+      console.log(`  Chave inválida — deve começar com "${prefix}"`)
+  }
+
+  saveEnv(keyName, key)
+  console.log('  ✅ Chave salva.')
+}
 
 // ── Autenticação ──────────────────────────────────────────────────────────────
 
@@ -20,11 +73,6 @@ function loadToken() {
 
 function saveToken(token) {
   fs.writeFileSync(SESSION_FILE, JSON.stringify({ token }), 'utf8')
-}
-
-function ask(question) {
-  const rl = readline.createInterface({ input: process.stdin, output: process.stdout })
-  return new Promise(resolve => rl.question(question, ans => { rl.close(); resolve(ans.trim()) }))
 }
 
 async function login() {
@@ -91,14 +139,11 @@ function formatReport(report) {
 // ── Execução de um job ────────────────────────────────────────────────────────
 
 async function runJob(job, token) {
-  const headers    = { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }
+  const headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }
   const { task_id: taskId, type: jobType = 'qa_task' } = job
 
-  // Reivindica o job atomicamente — se outro worker pegou antes, para aqui
   const claimRes = await fetch(`${BACKEND_URL}/qa-jobs/${taskId}/claim`, {
-    method: 'POST',
-    headers,
-    body:   JSON.stringify({ type: jobType }),
+    method: 'POST', headers, body: JSON.stringify({ type: jobType }),
   })
   const { claimed } = await claimRes.json()
   if (!claimed) return
@@ -109,25 +154,16 @@ async function runJob(job, token) {
 
   const postResult = (status, report, tokensUsed) =>
     fetch(`${BACKEND_URL}/qa-jobs/${taskId}/result`, {
-      method:  'POST',
-      headers,
-      body:    JSON.stringify({ type: jobType, status, report, tokensUsed }),
+      method: 'POST', headers,
+      body:   JSON.stringify({ type: jobType, status, report, tokensUsed }),
     })
 
   try {
-    const runner = new NocorPlus({
-      headless: job.crawl_headless !== false,
-      verbose:  true,
-    })
-
-    // Criteria do Asana → scenario[] do NocorPlus
-    // Se não há critérios, usa o título como goal simples
-    const hasCredentials = job.login_email && job.login_password
-    const inputData      = hasCredentials
+    const runner   = new NocorPlus({ headless: job.crawl_headless !== false, verbose: true })
+    const inputData = (job.login_email && job.login_password)
       ? { email: job.login_email, password: job.login_password }
       : undefined
-
-    const runInput = (job.criteria?.length)
+    const runInput  = job.criteria?.length
       ? { url: job.preview_url, scenario: job.criteria.map(c => ({ step: c })), data: inputData }
       : { url: job.preview_url, goal: job.title, data: inputData }
 
@@ -137,14 +173,13 @@ async function runJob(job, token) {
 
     await postResult(statusMap[report.status] || 'done', formatReport(report), tokensUsed)
     console.log(`  ✅ Concluído: ${report.status}  R$ ${report.cost?.brl ?? '?'}`)
-
   } catch (err) {
     await postResult('error', `Erro: ${err.message}`)
     console.error('  ❌ Erro:', err.message)
   }
 }
 
-// ── Loop principal ────────────────────────────────────────────────────────────
+// ── Main ──────────────────────────────────────────────────────────────────────
 
 async function main() {
   console.log()
@@ -153,31 +188,27 @@ async function main() {
   console.log('  ╚══════════════════════════════════════════╝')
   console.log()
 
+  await ensureApiKey()
+
   let token = await ensureToken()
-  console.log('  ✅ Autenticado. Aguardando jobs...\n')
+  console.log('\n  ✅ Autenticado. Aguardando jobs...\n')
 
   while (true) {
     try {
       const res = await fetch(`${BACKEND_URL}/qa-jobs/pending`, {
         headers: { Authorization: `Bearer ${token}` },
       })
-
       if (res.status === 401) {
         console.log('  🔄 Sessão expirada — fazendo login novamente...')
         token = await login()
         continue
       }
-
       const job = await res.json()
       if (job) await runJob(job, token)
-
     } catch (err) {
-      // Rede fora ou backend dormindo (Render free tier) — silencioso
-      if (!err.message?.includes('fetch failed') && !err.message?.includes('ECONNREFUSED')) {
+      if (!err.message?.includes('fetch failed') && !err.message?.includes('ECONNREFUSED'))
         console.error('  [worker]', err.message)
-      }
     }
-
     await new Promise(r => setTimeout(r, POLL_MS))
   }
 }
