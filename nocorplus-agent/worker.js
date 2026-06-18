@@ -261,7 +261,7 @@ async function runJob(job, token) {
     })
 
   try {
-    const runner = new NocorPlus({ headless: job.crawl_headless === true, verbose: false })
+    const runner = new NocorPlus({ headless: false, verbose: false })
 
     const inputData = (job.login_email && job.login_password)
       ? { email: job.login_email, password: job.login_password }
