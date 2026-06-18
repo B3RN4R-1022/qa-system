@@ -30,6 +30,23 @@ function saveEnv(key, value) {
   process.env[key] = value
 }
 
+function clearApiKeys() {
+  for (const key of ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY']) {
+    let content = ''
+    try { content = fs.readFileSync(ENV_FILE, 'utf8') } catch {}
+    content = content.replace(new RegExp(`^${key}=.*$`, 'm'), `${key}=`)
+    try { fs.writeFileSync(ENV_FILE, content, 'utf8') } catch {}
+    delete process.env[key]
+  }
+}
+
+function isInvalidKeyError(err) {
+  const m = err?.message || ''
+  return m.includes('authentication_error') || m.includes('invalid x-api-key') ||
+         m.includes('invalid_api_key') || m.includes('Incorrect API key') ||
+         m.includes('401')
+}
+
 // ── Chave de API ──────────────────────────────────────────────────────────────
 
 async function ensureApiKey() {
@@ -183,6 +200,12 @@ async function runJob(job, token) {
     await postResult(statusMap[report.status] || 'done', formatReport(report), tokensUsed)
     console.log(`  ✅ Concluído: ${report.status}  R$ ${report.cost?.brl ?? '?'}`)
   } catch (err) {
+    if (isInvalidKeyError(err)) {
+      console.error('\n  ❌ Chave de API inválida — configure uma nova:')
+      clearApiKeys()
+      await ensureApiKey()
+      return
+    }
     await postResult('error', `Erro: ${err.message}`)
     console.error('  ❌ Erro:', err.message)
   }
