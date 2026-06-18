@@ -60,15 +60,9 @@ if (-not (Test-Path $src)) {
   Read-Host "  Pressione Enter para sair"; exit 1
 }
 
-# Preserva .env e .session.json ao atualizar
-$savedEnv     = if (Test-Path "$dest\.env")          { Get-Content "$dest\.env"          -Raw } else { $null }
-$savedSession = if (Test-Path "$dest\.session.json") { Get-Content "$dest\.session.json" -Raw } else { $null }
-
-if (Test-Path $dest) { Remove-Item -Recurse -Force $dest }
-Copy-Item -Recurse $src $dest
-
-if ($savedEnv)     { Set-Content "$dest\.env"          $savedEnv     }
-if ($savedSession) { Set-Content "$dest\.session.json" $savedSession }
+# Copia arquivos por cima — preserva .env e .session.json (não existem no src)
+if (-not (Test-Path $dest)) { New-Item -ItemType Directory -Path $dest -Force | Out-Null }
+Copy-Item -Recurse "$src\*" $dest -Force
 
 Remove-Item $zip -ErrorAction SilentlyContinue
 Remove-Item -Recurse -Force $extracted -ErrorAction SilentlyContinue
