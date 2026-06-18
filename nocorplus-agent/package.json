@@ -1,0 +1,13 @@
+{
+  "name": "nocorplus-agent",
+  "version": "1.0.0",
+  "description": "Nocorp+ QA agent — substitui o qa-agent Python no QA System",
+  "main": "worker.js",
+  "scripts": {
+    "start": "node worker.js"
+  },
+  "dependencies": {
+    "dotenv": "^17.0.0",
+    "nocorplus": "git+https://github.com/B3RN4R-1022/nocorplus.git"
+  }
+}

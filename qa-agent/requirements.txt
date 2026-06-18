@@ -1,5 +1,0 @@
-browser-use==0.12.9
-openai==2.16.0
-langchain-openai
-langchain-ollama
-playwright
