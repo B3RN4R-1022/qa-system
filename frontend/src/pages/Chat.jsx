@@ -830,7 +830,7 @@ export default function Chat() {
           <div>
             <h1 className="font-semibold text-gray-900 dark:text-white text-sm leading-tight">Agente de QA</h1>
             <p className="text-[11px] text-gray-400 leading-tight">
-              Powered by Cerebras · Digite <code className="bg-gray-100 dark:bg-gray-800 px-1 rounded text-blue-600 dark:text-blue-400">/teste-qa</code> para executar um teste automatizado
+              Digite <code className="bg-gray-100 dark:bg-gray-800 px-1 rounded text-blue-600 dark:text-blue-400">/teste-qa</code> para executar um teste automatizado
             </p>
           </div>
         </div>
@@ -994,7 +994,7 @@ export default function Chat() {
           </button>
         </div>
         <p className="text-center text-[11px] text-gray-400 dark:text-gray-600 mt-1.5">
-          Powered by Cerebras · gpt-oss-120b · histórico salvo para contexto entre sessões
+          Powered by OpenAI · gpt-4o-mini · histórico salvo para contexto entre sessões
         </p>
       </div>
     </div>

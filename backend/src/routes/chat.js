@@ -48,39 +48,19 @@ router.get('/history', async (req, res) => {
   }
 })
 
-// Chama a Cerebras API (compatível com OpenAI). Tenta primary_model primeiro;
-// se receber 429 faz fallback automático para fallback_model.
-async function callCerebras(apiKey, messages) {
-  const CEREBRAS_URL = 'https://api.cerebras.ai/v1/chat/completions'
-  const PRIMARY_MODEL  = 'gpt-oss-120b'
-  const FALLBACK_MODEL = 'zai-glm-4.7'
+async function callOpenAI(messages) {
+  const apiKey = process.env.OPENAI_API_KEY
+  if (!apiKey) throw new Error('OPENAI_API_KEY não configurada no servidor')
 
-  async function attempt(model) {
-    const res = await fetch(CEREBRAS_URL, {
-      method: 'POST',
-      headers: {
-        'Content-Type':  'application/json',
-        'Authorization': `Bearer ${apiKey}`
-      },
-      body: JSON.stringify({ model, messages, temperature: 0.7, max_tokens: 2048 })
-    })
-    return { res, data: await res.json() }
-  }
-
-  let { res, data } = await attempt(PRIMARY_MODEL)
-
-  // 429 → fallback
-  if (res.status === 429) {
-    console.warn('[Chat] Cerebras 429 em gpt-oss-120b, tentando zai-glm-4.7...');
-    ({ res, data } = await attempt(FALLBACK_MODEL))
-  }
-
-  if (!res.ok) {
-    throw new Error('Cerebras API error: ' + (data.error?.message || res.status))
-  }
-
+  const res  = await fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+    body: JSON.stringify({ model: 'gpt-4o-mini', messages, temperature: 0.7, max_tokens: 2048 })
+  })
+  const data = await res.json()
+  if (!res.ok) throw new Error('OpenAI API error: ' + (data.error?.message || res.status))
   const reply = data.choices?.[0]?.message?.content
-  if (!reply) throw new Error('Resposta vazia da Cerebras')
+  if (!reply) throw new Error('Resposta vazia da OpenAI')
   return reply
 }
 
@@ -90,14 +70,9 @@ router.post('/message', async (req, res) => {
   if (!content?.trim()) return res.status(400).json({ error: 'Mensagem vazia' })
 
   try {
-    // Busca a Cerebras API key do banco
-    const keyRecord = await prisma.aIKnowledge.findUnique({
-      where: { type_name: { type: 'config', name: 'cerebras_api_key' } }
-    })
-
-    if (!keyRecord?.content) {
+    if (!process.env.OPENAI_API_KEY) {
       return res.status(500).json({
-        error: 'Cerebras API key não configurada. Vá em Configurações → Config de IA e adicione sua chave csk-...'
+        error: 'OPENAI_API_KEY não configurada no servidor. Adicione em Render → Environment Variables.'
       })
     }
 
@@ -135,8 +110,7 @@ router.post('/message', async (req, res) => {
       ...history.map(m => ({ role: m.role, content: m.content }))
     ]
 
-    // Chama Cerebras (com fallback automático em 429)
-    const reply = await callCerebras(keyRecord.content, messages)
+    const reply = await callOpenAI(messages)
 
     // Salva resposta do assistente
     const saved = await prisma.chatMessage.create({
