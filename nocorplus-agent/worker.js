@@ -153,32 +153,6 @@ async function ensureApiKey() {
 
 // ── 3. Exibir config + opção de alterar ──────────────────────────────────────
 
-async function configureSrcRoot() {
-  const current = process.env.SRC_ROOT || ''
-  if (current) {
-    const change = await ask('  Alterar caminho do código-fonte? (s/N): ')
-    if (change.toLowerCase() !== 's') return
-  } else {
-    console.log()
-    console.log('  ℹ️  Code tools desativadas — sem código-fonte configurado.')
-    console.log('     Com srcRoot, o NocorPlus usa seletores reais dos seus')
-    console.log('     componentes React/Vue em vez de adivinhar pelo DOM.')
-  }
-  const newSrc = await ask('  Caminho do src do projeto (Enter para pular): ')
-  const trimmed = newSrc.trim()
-  if (trimmed) {
-    if (!fs.existsSync(trimmed)) {
-      console.log('  ⚠️  Caminho não encontrado — verifique e tente novamente')
-    } else {
-      saveEnv('SRC_ROOT', trimmed)
-      console.log('  ✅ Código-fonte configurado\n')
-    }
-  } else if (current) {
-    saveEnv('SRC_ROOT', '')
-    console.log('  ✅ Código-fonte removido\n')
-  }
-}
-
 async function showAndConfirmConfig() {
   const provider   = process.env.ANTHROPIC_API_KEY ? 'Claude'
                    : process.env.OPENAI_API_KEY    ? 'OpenAI'
@@ -189,15 +163,9 @@ async function showAndConfirmConfig() {
   const session = loadSession()
   const account = session?.email || (session?.token ? 'sessão salva' : '(não autenticado)')
 
-  const srcRoot    = process.env.SRC_ROOT || ''
-  const srcDisplay = srcRoot
-    ? (srcRoot.length > 35 ? '…' + srcRoot.slice(-(35)) : srcRoot)
-    : '(não configurado)'
-
   console.log('  ┌───────────────────────────────────────────────────┐')
   console.log(`  │  Provedor : ${(provider + '  ' + keyDisplay).padEnd(38)}│`)
   console.log(`  │  Conta    : ${account.padEnd(38)}│`)
-  console.log(`  │  Código   : ${srcDisplay.padEnd(38)}│`)
   console.log('  └───────────────────────────────────────────────────┘')
   console.log()
 
@@ -207,25 +175,40 @@ async function showAndConfirmConfig() {
     await ensureApiKey()
     try { fs.unlinkSync(SESSION_FILE) } catch {}
   }
-
-  await configureSrcRoot()
-
-  const kvDir     = path.join(__dirname, '.nocorplus', 'kv')
-  let   cacheInfo = ''
-  try {
-    const entries = fs.readdirSync(kvDir).length
-    cacheInfo = ` (${entries} planos salvos)`
-  } catch {}
-  const clearCache = await ask(`  Limpar cache de planos de IA?${cacheInfo} (s/N): `)
-  if (clearCache.toLowerCase() === 's') {
-    try {
-      fs.rmSync(kvDir, { recursive: true, force: true })
-      console.log('  ✅ Cache de planos limpo — IA vai replanejar no próximo teste\n')
-    } catch (e) {
-      console.log(`  ⚠️  Não foi possível limpar: ${e.message}\n`)
-    }
-  }
   console.log()
+}
+
+// ── Perguntas pré/pós-teste ───────────────────────────────────────────────────
+
+async function askSrcRoot() {
+  const current = process.env.SRC_ROOT || ''
+  const display  = current
+    ? (current.length > 40 ? '…' + current.slice(-40) : current)
+    : '(nenhum)'
+  console.log(`\n  Repositório: ${display}`)
+  const ans = await ask('  Alterar código-fonte do projeto? (s/N): ')
+  if (ans.toLowerCase() !== 's') return
+  const newSrc = await ask('  Caminho do src (Enter para remover): ')
+  const trimmed = newSrc.trim()
+  if (trimmed && !fs.existsSync(trimmed)) {
+    console.log('  ⚠️  Caminho não encontrado — mantendo anterior')
+    return
+  }
+  saveEnv('SRC_ROOT', trimmed)
+  console.log(trimmed ? '  ✅ Código-fonte atualizado' : '  ✅ Código-fonte removido')
+}
+
+async function askClearCache() {
+  const kvDir = path.join(__dirname, '.nocorplus', 'kv')
+  let count = 0
+  try { count = fs.readdirSync(kvDir).length } catch {}
+  if (count === 0) return
+  const ans = await ask(`\n  Limpar cache de planos de IA? (${count} planos salvos) (s/N): `)
+  if (ans.toLowerCase() !== 's') return
+  try {
+    fs.rmSync(kvDir, { recursive: true, force: true })
+    console.log('  ✅ Cache limpo')
+  } catch {}
 }
 
 // ── 4. Autenticação ───────────────────────────────────────────────────────────
@@ -320,6 +303,9 @@ async function runJob(job, token) {
     console.log('        Dica: divida a tarefa em critérios no QA System')
   }
 
+  // Pergunta srcRoot antes de rodar
+  await askSrcRoot()
+
   const postResult = (status, report, tokensUsed) =>
     fetch(`${BACKEND_URL}/qa-jobs/${taskId}/result`, {
       method: 'POST', headers,
@@ -333,7 +319,8 @@ async function runJob(job, token) {
       verbose:  false,
       ...(srcRoot ? { srcRoot } : {}),
     })
-    if (srcRoot) console.log(`     Code tools: ${srcRoot}`)
+    if (srcRoot) console.log(`\n     Code tools: ${srcRoot}`)
+    console.log()
 
     const inputData = (job.login_email && job.login_password)
       ? { email: job.login_email, password: job.login_password }
@@ -348,7 +335,7 @@ async function runJob(job, token) {
     const tokensUsed = (report.cost?.inputTokens ?? 0) + (report.cost?.outputTokens ?? 0)
 
     await postResult(statusMap[report.status] || 'done', formatReport(report), tokensUsed)
-    console.log(`  ✅ ${report.status}  — R$ ${report.cost?.brl ?? '?'}  (${(report.durationMs / 1000).toFixed(1)}s)\n`)
+    console.log(`\n  ${report.status}  — R$ ${report.cost?.brl ?? '?'}  (${(report.durationMs / 1000).toFixed(1)}s)`)
 
   } catch (err) {
     if (isInvalidKeyError(err)) {
@@ -358,8 +345,13 @@ async function runJob(job, token) {
       return
     }
     await postResult('error', `Erro: ${err.message}`)
-    console.error(`  ❌ Erro: ${err.message}\n`)
+    console.error(`  ❌ Erro: ${err.message}`)
   }
+
+  // Pergunta cache depois de rodar e volta a aguardar
+  await askClearCache()
+  console.log('\n  ─────────────────────────────────────────────')
+  console.log('  Aguardando próximo teste...\n')
 }
 
 // ── Main ──────────────────────────────────────────────────────────────────────
