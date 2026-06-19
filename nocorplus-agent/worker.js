@@ -8,13 +8,15 @@ const readline = require('readline')
 const { spawn } = require('child_process')
 const { NocorPlus } = require('nocorplus')
 
-const BACKEND_URL  = (process.env.BACKEND_URL || 'https://qa-system-5vpf.onrender.com').replace(/\/$/, '')
-const POLL_MS      = 5000
-const SESSION_FILE = path.join(__dirname, '.session.json')
-const ENV_FILE     = path.join(__dirname, '.env')
-const VER_FILE     = path.join(__dirname, '.version')
-const GITHUB_REPO  = 'B3RN4R-1022/qa-system'
-const AGENT_PATH   = 'nocorplus-agent/worker.js'
+const BACKEND_URL    = (process.env.BACKEND_URL || 'https://qa-system-5vpf.onrender.com').replace(/\/$/, '')
+const POLL_MS        = 5000
+const SESSION_FILE   = path.join(__dirname, '.session.json')
+const ENV_FILE       = path.join(__dirname, '.env')
+const VER_FILE       = path.join(__dirname, '.version')
+const LOCK_FILE      = path.join(__dirname, 'package-lock.json')
+const GITHUB_REPO    = 'B3RN4R-1022/qa-system'
+const AGENT_PATH     = 'nocorplus-agent/worker.js'
+const NOCORPLUS_REPO = 'B3RN4R-1022/nocorplus'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -354,6 +356,41 @@ async function runJob(job, token) {
   console.log('  Aguardando próximo teste...\n')
 }
 
+// ── 7. Auto-update do NocorPlus ──────────────────────────────────────────────
+
+async function checkNocorPlusUpdate() {
+  try {
+    const res = await fetch(
+      `https://api.github.com/repos/${NOCORPLUS_REPO}/commits?per_page=1`,
+      { headers: { 'User-Agent': 'nocorplus-agent' } }
+    )
+    if (!res.ok) return
+
+    const [commit] = await res.json()
+    const latestSha = commit.sha
+
+    let installedSha = ''
+    try {
+      const lock = JSON.parse(fs.readFileSync(LOCK_FILE, 'utf8'))
+      const resolved = lock?.packages?.['node_modules/nocorplus']?.resolved || ''
+      installedSha = resolved.split('#')[1] || ''
+    } catch {}
+
+    if (installedSha && latestSha.startsWith(installedSha) || installedSha.startsWith(latestSha.slice(0, 10))) return
+
+    process.stdout.write('  Atualizando NocorPlus... ')
+    await new Promise((resolve, reject) => {
+      const npm = spawn('npm', ['update', 'nocorplus'], {
+        cwd: __dirname, stdio: 'pipe', shell: true,
+      })
+      npm.on('close', code => code === 0 ? resolve() : reject(new Error(`falhou (${code})`)))
+    })
+    console.log('✅\n')
+  } catch {
+    // silencioso — falha de rede não impede o worker de rodar
+  }
+}
+
 // ── Main ──────────────────────────────────────────────────────────────────────
 
 async function main() {
@@ -363,9 +400,12 @@ async function main() {
   console.log('  ╚══════════════════════════════════════════╝')
   console.log()
 
-  // 1 — update
+  // 1 — update do worker
   const restarting = await checkUpdates()
   if (restarting) return
+
+  // 1b — update do NocorPlus (automático, sem perguntar)
+  await checkNocorPlusUpdate()
 
   // 2 — chave de API (só pergunta se não tiver)
   await ensureApiKey()
