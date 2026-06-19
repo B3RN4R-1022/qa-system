@@ -102,8 +102,8 @@ async function checkUpdates() {
 
     console.log('  Atualizando pacotes NocorPlus...')
     await new Promise((resolve, reject) => {
-      const npm = spawn(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['install'], {
-        cwd: __dirname, stdio: 'inherit',
+      const npm = spawn('npm', ['install'], {
+        cwd: __dirname, stdio: 'inherit', shell: true,
       })
       npm.on('close', code => code === 0 ? resolve() : reject(new Error(`npm install falhou (${code})`)))
     }).catch(e => console.log(`  ⚠️  ${e.message}`))
