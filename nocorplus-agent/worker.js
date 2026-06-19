@@ -326,10 +326,17 @@ async function runJob(job, token) {
 
     const inputData = (job.login_email && job.login_password)
       ? { email: job.login_email, password: job.login_password }
-      : undefined
+      : (process.env.QA_LOGIN_EMAIL && process.env.QA_LOGIN_PASSWORD)
+        ? { email: process.env.QA_LOGIN_EMAIL, password: process.env.QA_LOGIN_PASSWORD }
+        : undefined
+
+    const projectContext = [
+      job.knowledge    ? `Project knowledge:\n${job.knowledge}`       : '',
+      job.description  ? `Task description: ${job.description}`       : '',
+    ].filter(Boolean).join('\n\n') || undefined
 
     const runInput = job.criteria?.length
-      ? { url: job.preview_url, scenario: job.criteria.map(c => ({ step: c, data: inputData })) }
+      ? { url: job.preview_url, scenario: job.criteria.map(c => ({ step: c, data: inputData })), context: projectContext }
       : { url: job.preview_url, goal: job.title, data: inputData }
 
     const report     = await runner.run(runInput)
