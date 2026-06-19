@@ -326,9 +326,7 @@ async function runJob(job, token) {
 
     const inputData = (job.login_email && job.login_password)
       ? { email: job.login_email, password: job.login_password }
-      : (process.env.QA_LOGIN_EMAIL && process.env.QA_LOGIN_PASSWORD)
-        ? { email: process.env.QA_LOGIN_EMAIL, password: process.env.QA_LOGIN_PASSWORD }
-        : undefined
+      : undefined
 
     const projectContext = [
       job.knowledge    ? `Project knowledge:\n${job.knowledge}`       : '',
