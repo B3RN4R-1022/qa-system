@@ -376,7 +376,7 @@ async function checkNocorPlusUpdate() {
       installedSha = resolved.split('#')[1] || ''
     } catch {}
 
-    if (installedSha && latestSha.startsWith(installedSha) || installedSha.startsWith(latestSha.slice(0, 10))) return
+    if (installedSha && installedSha === latestSha) return
 
     process.stdout.write('  Atualizando NocorPlus... ')
     await new Promise((resolve, reject) => {
