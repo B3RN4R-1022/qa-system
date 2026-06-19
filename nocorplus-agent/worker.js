@@ -381,13 +381,14 @@ async function checkNocorPlusUpdate() {
     process.stdout.write('  Atualizando NocorPlus... ')
     await new Promise((resolve, reject) => {
       const npm = spawn('npm', ['update', 'nocorplus'], {
-        cwd: __dirname, stdio: 'pipe', shell: true,
+        cwd: __dirname, stdio: 'inherit', shell: true,
       })
-      npm.on('close', code => code === 0 ? resolve() : reject(new Error(`falhou (${code})`)))
+      npm.on('close', code => code === 0 ? resolve() : reject(new Error(`npm update falhou (código ${code})`)))
+      npm.on('error', reject)
     })
-    console.log('✅\n')
-  } catch {
-    // silencioso — falha de rede não impede o worker de rodar
+    console.log('  NocorPlus atualizado ✅\n')
+  } catch (e) {
+    console.log(`  ⚠️  NocorPlus não atualizado: ${e.message}\n`)
   }
 }
 
