@@ -24,49 +24,12 @@ const TYPE_COLOR = {
   repo:        'bg-gray-50 dark:bg-gray-800 text-gray-600 dark:text-gray-400 border-gray-200 dark:border-gray-700',
 }
 
-function CacheCard({ project, onClearCache, onClearRepo, onClearRepoCache, onRemap, onSetType }) {
-  const [expanded, setExpanded] = useState(false)
-  const [cacheContent, setCacheContent] = useState(null)
-  const [loadingCache, setLoadingCache] = useState(false)
-  const [clearing, setClearing] = useState(false)
+function CacheCard({ project, onClearRepo, onClearRepoCache, onRemap, onSetType }) {
   const [clearingRepo, setClearingRepo] = useState(false)
   const [clearingRepoCache, setClearingRepoCache] = useState(false)
   const [remapping, setRemapping] = useState(false)
   const [savingType, setSavingType] = useState(false)
   const [editingType, setEditingType] = useState(false)
-
-  async function loadCache() {
-    if (cacheContent !== null) { setExpanded(e => !e); return }
-    setLoadingCache(true)
-    try {
-      const res = await fetch(`${API}/projects/${encodeURIComponent(project.name)}/cache`, {
-        headers: { Authorization: `Bearer ${token()}` }
-      })
-      const data = await res.json()
-      setCacheContent(data?.content || null)
-      setExpanded(true)
-    } catch {
-      setCacheContent(null)
-    } finally {
-      setLoadingCache(false)
-    }
-  }
-
-  async function clearCache() {
-    if (!confirm(`Limpar cache do projeto "${project.name}"? A próxima análise vai re-explorar o site do zero.`)) return
-    setClearing(true)
-    try {
-      await fetch(`${API}/projects/${encodeURIComponent(project.name)}/cache`, {
-        method: 'DELETE',
-        headers: { Authorization: `Bearer ${token()}` }
-      })
-      onClearCache(project.name)
-    } catch {
-      alert('Erro ao limpar cache')
-    } finally {
-      setClearing(false)
-    }
-  }
 
   async function saveType(type) {
     setSavingType(true)
@@ -178,16 +141,6 @@ function CacheCard({ project, onClearCache, onClearRepo, onClearRepoCache, onRem
               {TYPE_LABEL[project.projectType] || project.projectType}
             </span>
           )}
-          {project.hasCache ? (
-            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-400 text-[10px] font-medium border border-emerald-200 dark:border-emerald-800">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="w-2.5 h-2.5"><path strokeLinecap="round" strokeLinejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
-              Cache UI
-            </span>
-          ) : (
-            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-gray-50 dark:bg-gray-800 text-gray-400 text-[10px] font-medium border border-gray-200 dark:border-gray-700">
-              Sem cache UI
-            </span>
-          )}
           {project.hasSitemap ? (
             <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-violet-50 dark:bg-violet-900/20 text-violet-700 dark:text-violet-400 text-[10px] font-medium border border-violet-200 dark:border-violet-800">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="w-2.5 h-2.5"><path strokeLinecap="round" strokeLinejoin="round" d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7" /></svg>
@@ -209,9 +162,6 @@ function CacheCard({ project, onClearCache, onClearRepo, onClearRepoCache, onRem
 
       {/* Datas e repo path */}
       <div className="flex flex-col gap-0.5 mb-3">
-        {project.hasCache && project.cacheUpdatedAt && (
-          <p className="text-[11px] text-gray-400">Cache UI atualizado {relativeDate(project.cacheUpdatedAt)}</p>
-        )}
         {project.hasSitemap && (
           <p className="text-[11px] text-gray-400">
             🗺️ {project.sitemapPageCount ? `${project.sitemapPageCount} páginas mapeadas` : 'Site mapeado'}
@@ -275,23 +225,9 @@ function CacheCard({ project, onClearCache, onClearRepo, onClearRepoCache, onRem
 
       {/* Ações */}
       <div className="flex items-center gap-2 flex-wrap">
-        {project.hasCache && (
-          <>
-            <button onClick={loadCache} disabled={loadingCache}
-              className="text-xs text-indigo-600 dark:text-indigo-400 hover:text-indigo-800 dark:hover:text-indigo-200 transition-colors underline">
-              {loadingCache ? 'Carregando...' : expanded ? 'Ocultar cache UI' : 'Ver cache UI'}
-            </button>
-            <span className="text-gray-200 dark:text-gray-700 text-xs">·</span>
-            <button onClick={clearCache} disabled={clearing}
-              className="text-xs text-red-400 hover:text-red-600 dark:hover:text-red-300 transition-colors underline">
-              {clearing ? 'Limpando...' : 'Limpar cache UI'}
-            </button>
-          </>
-        )}
         {/* Botão de remap — só para Wix Velo */}
         {(!project.projectType || project.projectType === 'wix_velo') && (
           <>
-            {project.hasCache && <span className="text-gray-200 dark:text-gray-700 text-xs">·</span>}
             <button
               onClick={requestRemap}
               disabled={remapping}
@@ -329,53 +265,6 @@ function CacheCard({ project, onClearCache, onClearRepo, onClearRepoCache, onRem
         )}
       </div>
 
-      {/* Conteúdo expandido do cache */}
-      {expanded && cacheContent && (
-        <div className="mt-3 rounded-xl bg-gray-50 dark:bg-gray-800 border border-gray-100 dark:border-gray-700 p-3">
-          {parsed ? (
-            <div className="space-y-2">
-              {parsed.navigation && (
-                <div>
-                  <p className="text-[11px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-0.5">Navegação</p>
-                  <p className="text-xs text-gray-700 dark:text-gray-300 leading-relaxed">{parsed.navigation}</p>
-                </div>
-              )}
-              {parsed.loginFlow && (
-                <div>
-                  <p className="text-[11px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-0.5">Fluxo de Login</p>
-                  <p className="text-xs text-gray-700 dark:text-gray-300 leading-relaxed">{parsed.loginFlow}</p>
-                </div>
-              )}
-              {parsed.knownRoutes?.length > 0 && (
-                <div>
-                  <p className="text-[11px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-1">Rotas conhecidas</p>
-                  <div className="flex flex-wrap gap-1">
-                    {parsed.knownRoutes.map((r, i) => (
-                      <span key={i} className="text-[11px] px-2 py-0.5 rounded-md bg-white dark:bg-gray-700 border border-gray-200 dark:border-gray-600 text-gray-600 dark:text-gray-300 font-mono">
-                        {r}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              )}
-              {parsed.uiPatterns && (
-                <div>
-                  <p className="text-[11px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-0.5">Padrões de UI</p>
-                  <p className="text-xs text-gray-700 dark:text-gray-300 leading-relaxed">{parsed.uiPatterns}</p>
-                </div>
-              )}
-              {parsed.notes && (
-                <div>
-                  <p className="text-[11px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-0.5">Notas</p>
-                  <p className="text-xs text-gray-700 dark:text-gray-300 leading-relaxed">{parsed.notes}</p>
-                </div>
-              )}
-            </div>
-          ) : (
-            <pre className="text-xs text-gray-700 dark:text-gray-300 whitespace-pre-wrap font-mono">{cacheContent}</pre>
-          )}
-        </div>
-      )}
     </div>
   )
 }
@@ -400,12 +289,6 @@ export default function Projects() {
     } finally {
       setLoading(false)
     }
-  }
-
-  function handleClearCache(projectName) {
-    setProjects(prev => prev.map(p =>
-      p.name === projectName ? { ...p, hasCache: false, cacheUpdatedAt: null } : p
-    ))
   }
 
   function handleRemap(projectName) {
@@ -440,9 +323,6 @@ export default function Projects() {
     p.name.toLowerCase().includes(search.toLowerCase())
   )
 
-  const withCache    = projects.filter(p => p.hasCache).length
-  const withoutCache = projects.filter(p => !p.hasCache).length
-
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-gray-950 p-6">
       {/* Header */}
@@ -451,7 +331,7 @@ export default function Projects() {
           <div>
             <h1 className="text-xl font-bold text-gray-900 dark:text-white">Projetos</h1>
             <p className="text-sm text-gray-400 mt-0.5">
-              Cache de conhecimento da IA por projeto — evita re-explorar o mesmo site
+              Gerencie os projetos e seus dados de QA
             </p>
           </div>
           <button
@@ -473,12 +353,12 @@ export default function Projects() {
               <p className="text-xs text-gray-400 mt-0.5">Projetos</p>
             </div>
             <div className="bg-white dark:bg-gray-900 border border-gray-100 dark:border-gray-800 rounded-xl p-4 text-center">
-              <p className="text-2xl font-bold text-emerald-600 dark:text-emerald-400">{withCache}</p>
-              <p className="text-xs text-gray-400 mt-0.5">Com cache ativo</p>
+              <p className="text-2xl font-bold text-violet-600 dark:text-violet-400">{projects.filter(p => p.hasSitemap).length}</p>
+              <p className="text-xs text-gray-400 mt-0.5">Com sitemap</p>
             </div>
             <div className="bg-white dark:bg-gray-900 border border-gray-100 dark:border-gray-800 rounded-xl p-4 text-center">
-              <p className="text-2xl font-bold text-gray-400">{withoutCache}</p>
-              <p className="text-xs text-gray-400 mt-0.5">Sem cache</p>
+              <p className="text-2xl font-bold text-blue-600 dark:text-blue-400">{projects.filter(p => p.hasRepoCache).length}</p>
+              <p className="text-xs text-gray-400 mt-0.5">Com repo analisado</p>
             </div>
           </div>
         )}
@@ -529,7 +409,6 @@ export default function Projects() {
               <CacheCard
                 key={project.name}
                 project={project}
-                onClearCache={handleClearCache}
                 onClearRepo={handleClearRepo}
                 onClearRepoCache={handleClearRepoCache}
                 onRemap={handleRemap}
@@ -539,25 +418,6 @@ export default function Projects() {
           </div>
         )}
 
-        {/* Info sobre o cache */}
-        {!loading && projects.some(p => p.hasCache) && (
-          <div className="mt-6 p-4 rounded-xl bg-indigo-50 dark:bg-indigo-900/10 border border-indigo-200 dark:border-indigo-800">
-            <div className="flex gap-3">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} className="w-4 h-4 text-indigo-500 shrink-0 mt-0.5">
-                <circle cx="12" cy="12" r="9" />
-                <path strokeLinecap="round" d="M12 8v4M12 16h.01" />
-              </svg>
-              <div>
-                <p className="text-xs font-medium text-indigo-700 dark:text-indigo-400">Como funciona o cache</p>
-                <p className="text-xs text-indigo-600/70 dark:text-indigo-400/70 mt-0.5 leading-relaxed">
-                  Após cada teste, a IA salva o que aprendeu sobre o site (navegação, login, componentes, rotas).
-                  No próximo teste do mesmo projeto, ela usa esse mapa para ir direto ao ponto sem re-explorar tudo.
-                  Limpe o cache se o site teve mudanças estruturais significativas.
-                </p>
-              </div>
-            </div>
-          </div>
-        )}
       </div>
     </div>
   )

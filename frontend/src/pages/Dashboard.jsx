@@ -48,7 +48,7 @@ function FilterSelect({ label, value, onChange, options }) {
 
 function Dashboard() {
   const navigate = useNavigate()
-  const { isDev, user } = useAuth()
+  const { isDev, user, logout } = useAuth()
   const [tasks, setTasks] = useState([])
   const [loading, setLoading] = useState(true)
   const [erro, setErro] = useState(null)
