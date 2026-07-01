@@ -103,11 +103,6 @@ function CacheCard({ project, onClearRepo, onClearRepoCache, onRemap, onSetType 
     }
   }
 
-  let parsed = null
-  if (cacheContent) {
-    try { parsed = JSON.parse(cacheContent) } catch { parsed = null }
-  }
-
   return (
     <div className="bg-white dark:bg-gray-900 border border-gray-100 dark:border-gray-800 rounded-2xl p-5 shadow-sm hover:shadow-md transition-shadow">
       {/* Header do card */}
