@@ -8,6 +8,6 @@
   },
   "dependencies": {
     "dotenv": "^17.0.0",
-    "nocorplus": "git+https://github.com/B3RN4R-1022/nocorplus.git"
+    "nocorplus": "github:B3RN4R-1022/nocorplus"
   }
 }
