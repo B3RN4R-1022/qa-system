@@ -2,6 +2,7 @@ import { useNavigate, useLocation } from 'react-router-dom'
 import { useTheme } from '@/contexts/ThemeContext'
 import { useAuth } from '@/contexts/AuthContext'
 import { NocorpIcon } from '@/components/NocorpLogo'
+import WhatsNewButton from '@/components/WhatsNewButton'
 
 // ícones reutilizáveis
 const icons = {
@@ -140,6 +141,7 @@ export default function Sidebar() {
 
       {/* Botões no fundo */}
       <div className="mt-auto flex flex-col items-center gap-1">
+        <WhatsNewButton />
         <button
           onClick={logout}
           title="Sair"
